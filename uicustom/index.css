@@ -1,0 +1,55 @@
+
+.card {
+    margin-top: 1rem;
+}
+
+.custom-code {
+    /*background-color: #f8f9fa;*/
+    font-family: monospace; /* Monospace für Code */
+}
+
+.info {
+    color: #888888;
+}
+
+.rotate-45 {
+    transform: rotate(45deg);
+    display: inline-block;
+}
+
+.rotate-90 {
+    transform: rotate(90deg);
+    display: inline-block;
+}
+
+.rotate-135 {
+    transform: rotate(135deg);
+    display: inline-block;
+}
+
+.rotate-180 {
+    transform: rotate(180deg);
+    display: inline-block;
+}
+
+.rotate-270 {
+    transform: rotate(270deg);
+    display: inline-block;
+}
+
+.bi-arrow-90deg-left {
+    transform: rotate(180deg) translateY(5px);
+}
+
+.arrow {
+    transition: transform 0.3s ease;
+    display: inline-block;
+}
+
+.collapsed .arrow {
+    transform: rotate(180deg);
+}
+
+select.form-select {
+    width: max-content;
+}

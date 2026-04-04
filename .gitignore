@@ -1,0 +1,29 @@
+# --- RPG Maker MZ : runtime NW.js / Windows (inutile pour GitHub Pages) ---
+*.dll
+*.exe
+*.pak
+*.pak.info
+icudtl.dat
+v8_context_snapshot.bin
+resources.pak
+credits.html
+
+# Rendu logiciel Chromium embarqué (NW.js)
+swiftshader/
+
+# Manifeste NW.js uniquement (inutile pour le site statique)
+package.json
+
+# --- Sauvegardes locales et logs de test (pas à versionner) ---
+save/
+*.rmmzsave
+debug.log
+
+# --- Fichiers système / éditeurs ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+
+# --- Outils locaux (si tu en ajoutes plus tard) ---
+node_modules/
