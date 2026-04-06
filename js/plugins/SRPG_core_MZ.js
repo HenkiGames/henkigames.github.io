@@ -13103,7 +13103,7 @@ Sprite_SrpgMoveTile.prototype.constructor = Sprite_SrpgMoveTile;
 	// clear all enqueued skills
 	Scene_Map.prototype.srpgClearMapSkills = function() {
 		this._srpgSkillList = this._srpgSkillList || [];
-		this._srpgSkillList.clear();
+		this._srpgSkillList.length = 0;
 	};
 
 	// get the next skill off the queue and invoke it
