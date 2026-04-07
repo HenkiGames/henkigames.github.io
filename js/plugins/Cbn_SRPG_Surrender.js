@@ -14,7 +14,8 @@
  *
  * MENU SRPG : srpgMenuCommandList doit contenir "surrender" (voir parametres SRPG_core_MZ).
  *
- * Placez ce plugin APRES SRPG_core_MZ.
+ * Placez ce plugin APRES SRPG_core_MZ et (si vous l'utilisez) apres CustomGameOverRedirect
+ * pour que l'abandon declenche le transfert « defaite » (Scene_Gameover interceptee).
  *
  * @param menuLabel
  * @text Libelle dans le menu SRPG
@@ -33,7 +34,10 @@
 
   const _params = () => PluginManager.parameters(PLUGIN_NAME);
 
-  /** Tous les allies vivants a eliminer (SRPG = unites sur la carte via allMembers). */
+  /**
+   * Tous les allies vivants a eliminer.
+   * En SRPG, allMembers() ne couvre que les unites sur la carte ; la reserve reste dans _actors.
+   */
   function killAllAlliedActorsForDefeat() {
     if (!$gameSystem.isSRPGMode()) {
       for (const b of $gameParty.battleMembers()) {
@@ -44,6 +48,41 @@
     for (const a of $gameParty.allMembers()) {
       if (a && a.isAlive()) a.addState(a.deathStateId());
     }
+    const ids = $gameParty._actors ? $gameParty._actors.slice() : [];
+    for (const id of ids) {
+      const actor = $gameActors.actor(id);
+      if (actor && actor.isAlive()) actor.addState(actor.deathStateId());
+    }
+  }
+
+  /**
+   * Meme routine que Game_System.endSRPG sans recoverAll : sinon les allies morts peuvent etre revivifies
+   * par le soin de fin de bataille SRPG, et isAllDead() resterait faux.
+   */
+  function endSrpgAfterSurrenderDefeat() {
+    if (!$gameSystem.isSRPGMode()) return;
+    $gameTemp.clearActiveEvent();
+    $gameMap.events().forEach(event => {
+      const battler = $gameSystem.setEventIdToBattler(event.eventId());
+      if (battler) {
+        battler.onTurnEnd();
+        battler.onBattleEnd();
+      }
+    });
+    const srpgP = PluginManager.parameters("SRPG_core_MZ");
+    const switchId = Number(srpgP.srpgBattleSwitchID || 1);
+    $gameSystem._SRPGMode = false;
+    $gameSwitches.setValue(switchId, false);
+    $gameSystem._isBattlePhase = "initialize";
+    $gameSystem._isSubBattlePhase = "initialize";
+    $gamePlayer.loadOriginalData();
+    $gamePlayer.refresh();
+    $gameSystem.clearData();
+    $gameTemp.clearMoveTable();
+    $gameTemp.clearAreaTargets();
+    $gameTemp.clearArea();
+    $gameTemp.clearSrpgEventList();
+    $gameMap.setEventImages();
   }
 
   function canSrpgSurrenderOnMap() {
@@ -106,6 +145,10 @@
     }
     killAllAlliedActorsForDefeat();
     cbnSrpgSurrenderMapFinalize(scene);
+    endSrpgAfterSurrenderDefeat();
+    if (SceneManager && typeof Scene_Gameover !== "undefined") {
+      SceneManager.goto(Scene_Gameover);
+    }
   }
 
   window.srpgSurrenderBattle = function () {
