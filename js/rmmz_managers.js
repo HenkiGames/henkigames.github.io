@@ -104,7 +104,8 @@ DataManager.loadDatabase = function() {
 
 DataManager.loadDataFile = function(name, src) {
     const xhr = new XMLHttpRequest();
-    const url = "data/" + src;
+    const version = window.GAME_VERSION ? `?v=${encodeURIComponent(window.GAME_VERSION)}` : "";
+    const url = "data/" + src + version;
     window[name] = null;
     xhr.open("GET", url);
     xhr.overrideMimeType("application/json");

@@ -312,12 +312,16 @@ const pluginName = "SRPG_BattlePrepare_MZ";
 
 // A bunch of game party functions to get remaining actors in party, max and min actor number requirements
     Game_Party.prototype.pushRemainingActorList = function(id){
-        this._remainingActorList.push(id);
+        if (this._remainingActorList.indexOf(id) < 0) {
+            this._remainingActorList.push(id);
+        }
     }
 
     Game_Party.prototype.removeRemainingActorList = function(id){
         var index = this._remainingActorList.indexOf(id);
-        this._remainingActorList.splice(index, 1);
+        if (index >= 0) {
+            this._remainingActorList.splice(index, 1);
+        }
     }
 
     Game_Party.prototype.getRemainingActorList = function(){
@@ -918,6 +922,7 @@ const pluginName = "SRPG_BattlePrepare_MZ";
 
     Scene_Menu.prototype.SrpgRefreshPosition = function() {
         var scene = this
+        $gameParty.allMembers();
         var rActorList = $gameParty.getRemainingActorList()
         var addList = []
         $gameParty._srpgPrepareAllActors.forEach(function(id){
@@ -932,7 +937,8 @@ const pluginName = "SRPG_BattlePrepare_MZ";
                     $gameTemp.setActiveEvent(event);
                     scene.commandRemove();
                 } else if (actorArray && actorArray[1]) {
-                    addList.splice(addList.indexOf(actorArray[1].actorId()), 1)
+                    var _prepIdx = addList.indexOf(actorArray[1].actorId());
+                    if (_prepIdx >= 0) addList.splice(_prepIdx, 1);
                 }
             }
         });

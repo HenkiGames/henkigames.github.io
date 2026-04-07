@@ -18,6 +18,15 @@ const scriptUrls = [
 ];
 const effekseerWasmUrl = "js/libs/effekseer.wasm";
 
+function gameVersion() {
+    return window.GAME_VERSION || "dev";
+}
+
+function withCacheBuster(url) {
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}v=${encodeURIComponent(gameVersion())}`;
+}
+
 class Main {
     constructor() {
         this.xhrSucceeded = false;
@@ -67,12 +76,12 @@ class Main {
         for (const url of scriptUrls) {
             const script = document.createElement("script");
             script.type = "text/javascript";
-            script.src = url;
+            script.src = withCacheBuster(url);
             script.async = false;
             script.defer = true;
             script.onload = this.onScriptLoad.bind(this);
             script.onerror = this.onScriptError.bind(this);
-            script._url = url;
+            script._url = script.src;
             document.body.appendChild(script);
         }
         this.numScripts = scriptUrls.length;
@@ -142,7 +151,7 @@ class Main {
     initEffekseerRuntime() {
         const onLoad = this.onEffekseerLoad.bind(this);
         const onError = this.onEffekseerError.bind(this);
-        effekseer.initRuntime(effekseerWasmUrl, onLoad, onError);
+        effekseer.initRuntime(withCacheBuster(effekseerWasmUrl), onLoad, onError);
     }
 
     onEffekseerLoad() {

@@ -131,8 +131,13 @@
     return out;
   }
 
+  /** Tous les acteurs possédés (équipe + réserve), pas seulement members() qui en combat = combattants visibles. */
+  function partyActorIdSet() {
+    return new Set(($gameParty._actors || []).filter(id => id > 0));
+  }
+
   function filterPartyActorIds(actorIds) {
-    const memberIds = new Set($gameParty.members().map(member => member.actorId()));
+    const memberIds = partyActorIdSet();
     return actorIds.filter(id => !memberIds.has(id));
   }
 
@@ -355,7 +360,7 @@
 
     selectActor() {
       const selectedId = this._actorIds[this._index];
-      if ($gameParty.members().some(member => member.actorId() === selectedId)) {
+      if (partyActorIdSet().has(selectedId)) {
         SceneManager.pop();
         return;
       }
