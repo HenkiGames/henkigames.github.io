@@ -316,6 +316,42 @@
         }
     }
 
+    /**
+     * Après échange SRPG sur carte : MoveTable / moveList du déplacement de l'acteur
+     * sortant restaient valides ; OK en actor_move rejouait l'ancien chemin sur le remplaçant.
+     * Recalcul via srpgMakeMoveTableOriginalPos (originalPos / originalMove déjà à jour) pour
+     * conserver un flux Annuler menu → actor_move avec zones de déplacement correctes.
+     */
+    function clearSrpgMovementStateAfterReserveSwap(activeEvent, arrivedBattler) {
+        if (!$gameSystem || !$gameSystem.isSRPGMode || !$gameSystem.isSRPGMode()) return;
+        if (activeEvent && activeEvent._srpgForceRoute) {
+            activeEvent._srpgForceRoute = [];
+        }
+        if ($gameSystem.setSrpgWaitMoving) {
+            $gameSystem.setSrpgWaitMoving(false);
+        }
+        if (arrivedBattler && arrivedBattler.setMovedStep) {
+            arrivedBattler.setMovedStep(0);
+        }
+        if (activeEvent && $gameSystem.srpgMakeMoveTableOriginalPos) {
+            $gameSystem.srpgMakeMoveTableOriginalPos(activeEvent);
+        } else if ($gameTemp && $gameTemp.clearMoveTable) {
+            $gameTemp.clearMoveTable();
+        }
+        if ($gameTemp && $gameTemp.setResetMoveList) {
+            $gameTemp.setResetMoveList(true);
+        }
+        if ($gamePlayer && activeEvent) {
+            const px = activeEvent.posX();
+            const py = activeEvent.posY();
+            if (typeof $gamePlayer.slideTo === "function") {
+                $gamePlayer.slideTo(px, py);
+            } else if ($gamePlayer.jump) {
+                $gamePlayer.jump(px - $gamePlayer.x, py - $gamePlayer.y);
+            }
+        }
+    }
+
     function sortExchangeBeforeWait(commandWindow) {
         if (!commandWindow || !commandWindow._list || !Array.isArray(commandWindow._list)) return;
         const list = commandWindow._list;
@@ -938,6 +974,7 @@
                     posBattler.srpgMove()
                 );
             }
+            clearSrpgMovementStateAfterReserveSwap(activeEvent, posBattler || newActor);
             playExchangeArrivalFx(activeEvent, newActor);
             if (wasDeath && deadActorId != null) {
                 $gameParty.removeActor(deadActorId);
