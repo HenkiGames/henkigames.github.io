@@ -70,6 +70,9 @@
       recruited.initialize(selectedId);
     }
     $gameParty.addActor(selectedId);
+    const recruitedMember = $gameActors.actor(selectedId);
+    $gameVariables.setValue(109, recruitedMember ? recruitedMember.name() : "");
+    $gameVariables.setValue(110, 1);
     $gameVariables.setValue(102, $gameVariables.value(102) + 1);
     SoundManager.playOk();
   }
@@ -81,10 +84,12 @@
     const availableIds = shuffleArray(filtered).slice(0, 3);
 
     if (availableIds.length === 0) {
+      $gameVariables.setValue(110, 0);
       SoundManager.playBuzzer();
       return;
     }
 
+    $gameVariables.setValue(110, 0);
     nextActorIds = availableIds;
     SceneManager.push(Scene_CharacterSelect);
   });
@@ -264,6 +269,7 @@
     onCancelCarousel() {
       if (!this._canCancelCarousel) return;
       SoundManager.playCancel();
+      $gameVariables.setValue(110, 0);
       SceneManager.pop();
     }
 
@@ -361,6 +367,7 @@
     selectActor() {
       const selectedId = this._actorIds[this._index];
       if (partyActorIdSet().has(selectedId)) {
+        $gameVariables.setValue(110, 0);
         SceneManager.pop();
         return;
       }
@@ -479,6 +486,7 @@
     start() {
       super.start();
       if (!this._newActorId || !$dataActors[this._newActorId]) {
+        $gameVariables.setValue(110, 0);
         SceneManager.pop();
         return;
       }
@@ -565,6 +573,7 @@
         this.clearPendingReplaceSelection();
         return;
       }
+      $gameVariables.setValue(110, 0);
       SceneManager.pop();
     }
 
@@ -574,6 +583,7 @@
         this.clearPendingReplaceSelection();
         return;
       }
+      $gameVariables.setValue(110, 0);
       SceneManager.pop();
     }
   }

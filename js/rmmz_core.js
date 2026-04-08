@@ -1050,7 +1050,7 @@ Graphics._createEffekseerContext = function() {
                 this._effekseer.setRestorationOfStatesFlag(false);
             }
         } catch (e) {
-            this._app = null;
+            this._effekseer = null;
         }
     }
 };

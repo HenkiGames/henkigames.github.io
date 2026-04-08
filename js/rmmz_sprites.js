@@ -1257,7 +1257,7 @@ Sprite_Animation.prototype.update = function() {
         this._delay--;
     } else if (this._playing) {
         if (!this._started && this.canStart()) {
-            if (this._effect) {
+            if (this._effect && Graphics.effekseer) {
                 if (this._effect.isLoaded) {
                     this._handle = Graphics.effekseer.play(this._effect);
                     this._started = true;
