@@ -491,9 +491,13 @@
 		var a = user;
 		var event = this;
 		var meta = false;
+		var action = user.currentAction ? user.currentAction() : null;
+		if ((!action || !action.item()) && typeof user.action === "function") {
+			action = user.action(0);
+		}
 		if (this._aiMove !== undefined) {
 			meta = this._aiMove;
-		} else if ($gameTemp.targetEvent() && this.eventId() === $gameTemp.targetEvent().eventId() && action.item() && action.item().meta.aiMove) {//self targeting skill (does it really work?)
+		} else if ($gameTemp.targetEvent() && this.eventId() === $gameTemp.targetEvent().eventId() && action && action.item() && action.item().meta.aiMove) {//self targeting skill (does it really work?)
 			meta = action.item().meta.aiMove;
 		} else if (this.event().meta.aiMove){
 			meta = this.event().meta.aiMove;
