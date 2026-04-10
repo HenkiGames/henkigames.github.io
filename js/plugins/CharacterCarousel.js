@@ -385,12 +385,14 @@
     createStatsWindow() {
       const rect = new Rectangle(100, 300, Graphics.width - 200, 140);
       this._statsWindow = new Window_Base(rect);
+      this._statsWindow.deactivate();
       this.addWindow(this._statsWindow);
     }
 
     createDescriptionWindow() {
       const rect = new Rectangle(100, 440, Graphics.width - 200, 100);
       this._descWindow = new Window_Base(rect);
+      this._descWindow.deactivate();
       this.addWindow(this._descWindow);
     }
 
@@ -528,6 +530,15 @@
     }
 
     update() {
+      // OK / Annuler en premier : même effet que le bouton Valider (le clic ne passe pas par Input).
+      if (Input.isTriggered("ok")) {
+        this.selectActor();
+        return;
+      }
+      if (Input.isTriggered("cancel") && this._canCancelCarousel) {
+        this.onCancelCarousel();
+        return;
+      }
       super.update();
       if (Input.isTriggered("left")) {
         this._index = (this._index - 1 + this._actorIds.length) % this._actorIds.length;
@@ -537,10 +548,6 @@
         this._index = (this._index + 1) % this._actorIds.length;
         this.playSelectionSe();
         this.refreshDisplay();
-      } else if (Input.isTriggered("ok")) {
-        this.selectActor();
-      } else if (Input.isTriggered("cancel") && this._canCancelCarousel) {
-        this.onCancelCarousel();
       }
     }
 
