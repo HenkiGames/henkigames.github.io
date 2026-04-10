@@ -1661,6 +1661,7 @@ Bitmap.prototype.drawCircle = function(x, y, radius, color) {
 Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
     // [Note] Different browser makes different rendering with
     //   textBaseline == 'top'. So we use 'alphabetic' here.
+    if (align === undefined || align === null) align = "left";
     const context = this.context;
     const alpha = context.globalAlpha;
     maxWidth = maxWidth || 0xffffffff;

@@ -8720,9 +8720,12 @@ Sprite_SrpgMoveTile.prototype.constructor = Sprite_SrpgMoveTile;
         if ($gameTemp.isMoveListValid()) {
             if (!this._srpgMoveTile[0].isThisMoveTileValid()) {
                 var list = $gameTemp.moveList();
-                for (var i = 0; i < list.length; i++) {
+                var maxSprites = $gameSystem.spriteMoveTileMax();
+                var n = Math.min(list.length, maxSprites);
+                for (var i = 0; i < n; i++) {
                     var pos = list[i];
-                    this._srpgMoveTile[i].setThisMoveTile(pos[0], pos[1], pos[2]);
+                    var tile = this._srpgMoveTile[i];
+                    if (tile) tile.setThisMoveTile(pos[0], pos[1], pos[2]);
                 }
             }
         } else {
