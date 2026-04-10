@@ -29,17 +29,31 @@
  * @text IDs des acteurs
  * @desc Optionnel. Exemples: 201,202,203 ou ["201","202","203"]
  * @type string
+ *
+ * @command StartCharacterEvolutionSelect
+ * @text Sélection évolution (1 parmi 3)
+ * @desc Même carousel sans exclure les possédés. Validation d’un possédé : remplacement via <evolution:ID>. Pool : chaque ID liste suit la forme la plus évoluée possédée ; si elle n’a plus de méta evolution valide, la place est retirée du tirage (l’ID d’origine ne revient pas).
+ *
+ * @arg actorIds
+ * @text IDs des acteurs
+ * @desc Optionnel. Exemples: 201,202,203 ou ["201","202","203"]
+ * @type string
  */
 
 (() => {
   const pluginName = "CharacterCarousel";
   const rawParams = PluginManager.parameters(pluginName);
   const DEFAULT_ACTOR_IDS = [201, 202, 203];
+  const EVOLUTION_META_KEY = "evolution";
+  const NEW_SKILL_META_KEY = "newSkill";
   let nextActorIds = null;
   let pendingReplaceNewActorId = null;
+  /** Mode évolution : pas de filtre « déjà dans l’équipe » ; validation sur un possédé déclenche le remplacement via méta evolution. */
+  let evolutionCarouselMode = false;
   /** Conservés après SceneManager.push : pop() recrée Scene_CharacterSelect avec `new`, sans réutiliser l’instance. */
   let savedCarouselActorIds = null;
   let savedCarouselIndex = 0;
+  let savedCarouselEvolutionMode = false;
 
   const maxActorsDefault = Math.max(1, Number(rawParams.maxActors) || 6);
   const maxActorsVariableId = Number(rawParams.maxActorsVariableId) || 0;
@@ -77,21 +91,160 @@
     SoundManager.playOk();
   }
 
-  PluginManager.registerCommand(pluginName, "StartCharacterSelect", args => {
-    const requestedIds = parseActorIdsArg(args.actorIds);
-    const sourceIds = requestedIds.length > 0 ? requestedIds : DEFAULT_ACTOR_IDS;
-    const filtered = filterUnavailableActorIds(sourceIds);
+  /** Lit l’ID acteur cible depuis la note DB, ex. <evolution:3> → méta evolution = "3". */
+  function getEvolutionActorIdFromData(actorData) {
+    if (!actorData || !actorData.meta) return null;
+    const raw = actorData.meta[EVOLUTION_META_KEY];
+    if (raw == null || raw === "") return null;
+    const id = Number(String(raw).trim());
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  /** Note ex. <newSkill: "Lame d'Air"> ou <newSkill: Tranch'Herbe> → nom affichable pour la variable 113. */
+  function getNewSkillNameFromActorData(actorData) {
+    if (!actorData || !actorData.meta) return "";
+    const raw = actorData.meta[NEW_SKILL_META_KEY];
+    if (raw == null || raw === "") return "";
+    let s = String(raw).trim();
+    if (
+      (s.startsWith('"') && s.endsWith('"')) ||
+      (s.startsWith("'") && s.endsWith("'"))
+    ) {
+      s = s.slice(1, -1);
+    }
+    return s;
+  }
+
+  /** Méta sur l’acteur qui part en priorité, sinon sur la forme obtenue. */
+  function getEvolutionNewSkillDisplayName(oldActorId, newActorId) {
+    const fromOld = getNewSkillNameFromActorData($dataActors[oldActorId]);
+    if (fromOld !== "") return fromOld;
+    return getNewSkillNameFromActorData($dataActors[newActorId]);
+  }
+
+  /** La méta evolution pointe vers un acteur défini dans la base (évolution possible). */
+  function hasValidFollowingEvolution(actorId) {
+    const data = $dataActors[actorId];
+    const nextId = getEvolutionActorIdFromData(data);
+    return nextId != null && !!$dataActors[nextId] && nextId !== actorId;
+  }
+
+  /** Plus profonde forme de la lignée `rootId` présente dans l’équipe/réserve (A→C→E, équipe a E → retourne E). */
+  function deepestPartyFormAlongEvolutionChain(rootId) {
+    const members = partyActorIdSet();
+    let lastInParty = null;
+    let walk = rootId;
+    const visited = new Set();
+    while (walk && $dataActors[walk] && !visited.has(walk)) {
+      visited.add(walk);
+      if (members.has(walk)) {
+        lastInParty = walk;
+      }
+      const nextId = getEvolutionActorIdFromData($dataActors[walk]);
+      if (!nextId || !$dataActors[nextId]) break;
+      walk = nextId;
+    }
+    return lastInParty;
+  }
+
+  /**
+   * Pour la commande évolution : chaque ID source = une « place » dans la liste d’événement.
+   * Si l’acteur n’est plus possédé mais une forme évoluée l’est, on propose cette forme
+   * uniquement si elle peut encore évoluer (méta evolution valide), sinon la place est vide.
+   */
+  function resolveEvolutionPoolSlotId(rootId) {
+    if (!$dataActors[rootId]) return null;
+    const deepest = deepestPartyFormAlongEvolutionChain(rootId);
+    if (deepest != null) {
+      return hasValidFollowingEvolution(deepest) ? deepest : null;
+    }
+    return rootId;
+  }
+
+  function buildEvolutionPoolActorIds(sourceIds) {
+    const valid = filterValidActorIds(sourceIds);
+    const seen = new Set();
+    const out = [];
+    for (const id of valid) {
+      const resolved = resolveEvolutionPoolSlotId(id);
+      if (resolved == null) continue;
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      out.push(resolved);
+    }
+    return out;
+  }
+
+  function performEvolutionSwap(oldActorId, newActorId) {
+    if (!oldActorId || oldActorId <= 0 || !newActorId || newActorId <= 0) return false;
+    if (!$dataActors[newActorId]) return false;
+    if (!$gameParty._actors || !$gameParty._actors.includes(oldActorId)) return false;
+
+    const leavingMember = $gameActors.actor(oldActorId);
+    const leavingName = leavingMember
+      ? leavingMember.name()
+      : $dataActors[oldActorId]
+        ? $dataActors[oldActorId].name
+        : "";
+
+    $gameParty.removeActor(oldActorId);
+    if (typeof prepareRecruitmentAfterPermanentDeath === "function") {
+      prepareRecruitmentAfterPermanentDeath(newActorId);
+    }
+    const recruited = $gameActors.actor(newActorId);
+    if (recruited) {
+      recruited.initialize(newActorId);
+    }
+    $gameParty.addActor(newActorId);
+    const recruitedMember = $gameActors.actor(newActorId);
+    $gameVariables.setValue(109, leavingName);
+    $gameVariables.setValue(110, 1);
+    $gameVariables.setValue(111, 1);
+    $gameVariables.setValue(112, recruitedMember ? recruitedMember.name() : "");
+    $gameVariables.setValue(113, getEvolutionNewSkillDisplayName(oldActorId, newActorId));
+    SoundManager.playOk();
+    return true;
+  }
+
+  function startCarouselFromSourceIds(sourceIds, options) {
+    const withEvolution = options && options.evolution === true;
+    const filtered = withEvolution
+      ? buildEvolutionPoolActorIds(sourceIds)
+      : filterUnavailableActorIds(sourceIds);
     const availableIds = shuffleArray(filtered).slice(0, 3);
 
     if (availableIds.length === 0) {
       $gameVariables.setValue(110, 0);
+      if (withEvolution) {
+        $gameVariables.setValue(111, 0);
+        $gameVariables.setValue(112, "");
+        $gameVariables.setValue(113, "");
+      }
       SoundManager.playBuzzer();
       return;
     }
 
     $gameVariables.setValue(110, 0);
+    if (withEvolution) {
+      $gameVariables.setValue(111, 0);
+      $gameVariables.setValue(112, "");
+      $gameVariables.setValue(113, "");
+    }
+    evolutionCarouselMode = withEvolution;
     nextActorIds = availableIds;
     SceneManager.push(Scene_CharacterSelect);
+  }
+
+  PluginManager.registerCommand(pluginName, "StartCharacterSelect", args => {
+    const requestedIds = parseActorIdsArg(args.actorIds);
+    const sourceIds = requestedIds.length > 0 ? requestedIds : DEFAULT_ACTOR_IDS;
+    startCarouselFromSourceIds(sourceIds, { evolution: false });
+  });
+
+  PluginManager.registerCommand(pluginName, "StartCharacterEvolutionSelect", args => {
+    const requestedIds = parseActorIdsArg(args.actorIds);
+    const sourceIds = requestedIds.length > 0 ? requestedIds : DEFAULT_ACTOR_IDS;
+    startCarouselFromSourceIds(sourceIds, { evolution: true });
   });
 
   function parseActorIdsArg(rawValue) {
@@ -146,8 +299,28 @@
     return actorIds.filter(id => !memberIds.has(id));
   }
 
+  /**
+   * Vrai si une forme évoluée de `rootId` (A->C->E...) est déjà possédée.
+   * Permet d'éviter de reproposer une ancienne forme déjà dépassée.
+   */
+  function hasOwnedEvolvedForm(rootId) {
+    const memberIds = partyActorIdSet();
+    const visited = new Set();
+    let walk = rootId;
+    while (walk && $dataActors[walk] && !visited.has(walk)) {
+      visited.add(walk);
+      const nextId = getEvolutionActorIdFromData($dataActors[walk]);
+      if (!nextId || !$dataActors[nextId]) break;
+      if (memberIds.has(nextId)) return true;
+      walk = nextId;
+    }
+    return false;
+  }
+
   function filterUnavailableActorIds(actorIds) {
-    return filterPartyActorIds(filterValidActorIds(actorIds));
+    const valid = filterValidActorIds(actorIds);
+    const notInParty = filterPartyActorIds(valid);
+    return notInParty.filter(id => !hasOwnedEvolvedForm(id));
   }
 
   function shuffleArray(array) {
@@ -170,11 +343,16 @@
           0,
           Math.min(savedCarouselIndex, this._actorIds.length - 1)
         );
+        this._evolutionMode = savedCarouselEvolutionMode;
         savedCarouselActorIds = null;
         savedCarouselIndex = 0;
+        savedCarouselEvolutionMode = false;
       } else {
         this._actorIds =
-          nextActorIds || shuffleArray(filterUnavailableActorIds(DEFAULT_ACTOR_IDS)).slice(0, 3);
+          nextActorIds ||
+          shuffleArray(filterUnavailableActorIds(DEFAULT_ACTOR_IDS)).slice(0, 3);
+        this._evolutionMode = evolutionCarouselMode;
+        evolutionCarouselMode = false;
         nextActorIds = null;
         this._index = 0;
       }
@@ -366,7 +544,22 @@
 
     selectActor() {
       const selectedId = this._actorIds[this._index];
-      if (partyActorIdSet().has(selectedId)) {
+      const alreadyInParty = partyActorIdSet().has(selectedId);
+
+      if (this._evolutionMode && alreadyInParty) {
+        const data = $dataActors[selectedId];
+        const evolveToId = getEvolutionActorIdFromData(data);
+        if (!evolveToId || !$dataActors[evolveToId] || evolveToId === selectedId) {
+          SoundManager.playBuzzer();
+          return;
+        }
+        if (performEvolutionSwap(selectedId, evolveToId)) {
+          SceneManager.pop();
+        }
+        return;
+      }
+
+      if (alreadyInParty) {
         $gameVariables.setValue(110, 0);
         SceneManager.pop();
         return;
@@ -374,6 +567,7 @@
       if ($gameParty.allMembers().length >= getMaxActorsCap()) {
         savedCarouselActorIds = this._actorIds.slice();
         savedCarouselIndex = this._index;
+        savedCarouselEvolutionMode = this._evolutionMode;
         pendingReplaceNewActorId = selectedId;
         SceneManager.push(Scene_CharacterCarouselReplace);
         return;
@@ -530,6 +724,7 @@
       }
       savedCarouselActorIds = null;
       savedCarouselIndex = 0;
+      savedCarouselEvolutionMode = false;
       performRecruitment(this._newActorId, actor.actorId());
       SceneManager.pop();
       SceneManager.pop();

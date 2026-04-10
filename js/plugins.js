@@ -59,5 +59,6 @@ var $plugins =
 {"name":"Cbn_CollapseSeByExchangeMeta","status":true,"description":"Remplace le SE de mort par celui défini en note <exchangeSe:nomFichier> sur acteur / ennemi.","parameters":{}},
 {"name":"SRPG_SyncMaxActorFromVar","status":true,"description":"SRPG — synchro nombre de places (variable), cases prépa, et limite core [SRPG_SyncMaxActorFromVar]","parameters":{"maxActorVariableId":"108","defaultCapIfVariableZero":"3"}},
 {"name":"Cbn_SRPG_Surrender","status":true,"description":"[SRPG] Abandon : termine le combat comme une defaite (meme logique que plus aucun allie vivant).","parameters":{"menuLabel":"Abandonner"}},
-{"name":"Cbn_StateChainAfterRemoval","status":false,"description":"Enchaîne un état quand un autre se termine, optionnel : événement commun.","parameters":{"chainRules":"\"67,10\"","maxChainDepth":"8","contextActorVariable":"0","contextEventIdVariable":"0"}}
+{"name":"Cbn_StateChainAfterRemoval","status":false,"description":"Enchaîne un état quand un autre se termine, optionnel : événement commun.","parameters":{"chainRules":"\"67,10\"","maxChainDepth":"8","contextActorVariable":"0","contextEventIdVariable":"0"}},
+{"name":"SRPG_OldCenterAnimation_MZ","status":true,"description":"SRPG helper: play old animation once at AoE center.","parameters":{}}
 ];

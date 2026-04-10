@@ -462,6 +462,9 @@
         if (line.match(/<SRPGAuraTarget:(\w+)>/i)) {
           dummyMeta.SRPGAuraTarget = RegExp.$1;
         }
+        if (line.match(/<SRPGAuraColor:([^>]+)>/i)) {
+          dummyMeta.SRPGAuraColor = String(RegExp.$1).trim();
+        }
       }
     }
 
@@ -477,7 +480,7 @@
 		var range = Number(item.meta.SRPGAuraRange) || _defaultRange;
 		var shape = item.meta.SRPGAuraShape || _defaultShape;
 		var minrange = Number(item.meta.SRPGAuraMinRange) || 0;
-		var color = item.meta.SRPGAuraColor || _defaultColor;
+		var color = (item.meta.SRPGAuraColor && String(item.meta.SRPGAuraColor).trim()) || _defaultColor;
 		var limx = $gameMap.width() - orix + range;
 		var limy = $gameMap.height() - oriy + range;
 		for (var x = Math.max(0, range -orix); x < 1+range*2 && x < limx; x++) {
