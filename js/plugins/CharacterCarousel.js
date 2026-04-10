@@ -216,6 +216,7 @@
     if (availableIds.length === 0) {
       $gameVariables.setValue(110, 0);
       if (withEvolution) {
+        $gameVariables.setValue(109, "");
         $gameVariables.setValue(111, 0);
         $gameVariables.setValue(112, "");
         $gameVariables.setValue(113, "");
@@ -226,6 +227,7 @@
 
     $gameVariables.setValue(110, 0);
     if (withEvolution) {
+      $gameVariables.setValue(109, "");
       $gameVariables.setValue(111, 0);
       $gameVariables.setValue(112, "");
       $gameVariables.setValue(113, "");
