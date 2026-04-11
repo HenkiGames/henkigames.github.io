@@ -38,6 +38,15 @@
  * @text IDs des acteurs
  * @desc Optionnel. Exemples: 201,202,203 ou ["201","202","203"]
  * @type string
+ *
+ * @command StartCharacterSelectFull
+ * @text Sélection personnage (liste complète)
+ * @desc Vide l’équipe et la réserve puis propose tous les actorIds (ordre conservé, sans filtre ni tirage). actorIds obligatoire. Recrutement comme « Démarrer la sélection de personnage » (choix du « starter »).
+ *
+ * @arg actorIds
+ * @text IDs des acteurs
+ * @desc Obligatoire. Liste complète à parcourir au carousel, ex. 201,202,203,204
+ * @type string
  */
 
 (() => {
@@ -50,10 +59,13 @@
   let pendingReplaceNewActorId = null;
   /** Mode évolution : pas de filtre « déjà dans l’équipe » ; validation sur un possédé déclenche le remplacement via méta evolution. */
   let evolutionCarouselMode = false;
+  /** Liste complète : tous les IDs de l’argument, sans filtre ni mélange. */
+  let fullListCarouselMode = false;
   /** Conservés après SceneManager.push : pop() recrée Scene_CharacterSelect avec `new`, sans réutiliser l’instance. */
   let savedCarouselActorIds = null;
   let savedCarouselIndex = 0;
   let savedCarouselEvolutionMode = false;
+  let savedCarouselFullListMode = false;
 
   const maxActorsDefault = Math.max(1, Number(rawParams.maxActors) || 6);
   const maxActorsVariableId = Number(rawParams.maxActorsVariableId) || 0;
@@ -70,6 +82,19 @@
       }
     }
     return maxActorsDefault;
+  }
+
+  /** Retire tous les acteurs de $gameParty (emplacements combat + réserve). */
+  function clearPartyAllSlotsForFullSelect() {
+    const ids = ($gameParty._actors || []).slice();
+    for (let i = ids.length - 1; i >= 0; i--) {
+      $gameParty.removeActor(ids[i]);
+    }
+    $gameParty._menuActorId = 0;
+    $gameParty._targetActorId = 0;
+    if (typeof $gameParty.clearSrpgBattleActors === "function") {
+      $gameParty.clearSrpgBattleActors();
+    }
   }
 
   function performRecruitment(selectedId, replaceActorId) {
@@ -207,11 +232,19 @@
   }
 
   function startCarouselFromSourceIds(sourceIds, options) {
-    const withEvolution = options && options.evolution === true;
-    const filtered = withEvolution
-      ? buildEvolutionPoolActorIds(sourceIds)
-      : filterUnavailableActorIds(sourceIds);
-    const availableIds = shuffleArray(filtered).slice(0, 3);
+    const fullList = options && options.fullList === true;
+    const withEvolution = !fullList && options && options.evolution === true;
+    let filtered;
+    if (fullList) {
+      filtered = filterValidActorIds(sourceIds);
+    } else if (withEvolution) {
+      filtered = buildEvolutionPoolActorIds(sourceIds);
+    } else {
+      filtered = filterUnavailableActorIds(sourceIds);
+    }
+    const availableIds = fullList
+      ? filtered
+      : shuffleArray(filtered).slice(0, 3);
 
     if (availableIds.length === 0) {
       $gameVariables.setValue(110, 0);
@@ -233,6 +266,7 @@
       $gameVariables.setValue(113, "");
     }
     evolutionCarouselMode = withEvolution;
+    fullListCarouselMode = fullList;
     nextActorIds = availableIds;
     SceneManager.push(Scene_CharacterSelect);
   }
@@ -247,6 +281,17 @@
     const requestedIds = parseActorIdsArg(args.actorIds);
     const sourceIds = requestedIds.length > 0 ? requestedIds : DEFAULT_ACTOR_IDS;
     startCarouselFromSourceIds(sourceIds, { evolution: true });
+  });
+
+  PluginManager.registerCommand(pluginName, "StartCharacterSelectFull", args => {
+    const requestedIds = parseActorIdsArg(args.actorIds);
+    if (requestedIds.length === 0) {
+      $gameVariables.setValue(110, 0);
+      SoundManager.playBuzzer();
+      return;
+    }
+    clearPartyAllSlotsForFullSelect();
+    startCarouselFromSourceIds(requestedIds, { fullList: true });
   });
 
   function parseActorIdsArg(rawValue) {
@@ -346,15 +391,19 @@
           Math.min(savedCarouselIndex, this._actorIds.length - 1)
         );
         this._evolutionMode = savedCarouselEvolutionMode;
+        this._fullListMode = savedCarouselFullListMode;
         savedCarouselActorIds = null;
         savedCarouselIndex = 0;
         savedCarouselEvolutionMode = false;
+        savedCarouselFullListMode = false;
       } else {
         this._actorIds =
           nextActorIds ||
           shuffleArray(filterUnavailableActorIds(DEFAULT_ACTOR_IDS)).slice(0, 3);
         this._evolutionMode = evolutionCarouselMode;
         evolutionCarouselMode = false;
+        this._fullListMode = fullListCarouselMode;
+        fullListCarouselMode = false;
         nextActorIds = null;
         this._index = 0;
       }
@@ -577,6 +626,7 @@
         savedCarouselActorIds = this._actorIds.slice();
         savedCarouselIndex = this._index;
         savedCarouselEvolutionMode = this._evolutionMode;
+        savedCarouselFullListMode = !!this._fullListMode;
         pendingReplaceNewActorId = selectedId;
         SceneManager.push(Scene_CharacterCarouselReplace);
         return;
@@ -734,6 +784,7 @@
       savedCarouselActorIds = null;
       savedCarouselIndex = 0;
       savedCarouselEvolutionMode = false;
+      savedCarouselFullListMode = false;
       performRecruitment(this._newActorId, actor.actorId());
       SceneManager.pop();
       SceneManager.pop();

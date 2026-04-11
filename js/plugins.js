@@ -42,7 +42,7 @@ var $plugins =
 {"name":"MenuTitleNewOption","status":false,"description":"Ajoute une option personnalisée au menu de titre pour lancer une map spécifique (comme une arène).","parameters":{"ArenaCommandName":"Mode Arena","ArenaMapId":"11","ArenaX":"8","ArenaY":"14"}},
 {"name":"DisplayHudInfo","status":false,"description":"Affiche \"Réputation\" en haut à droite et \"Équipe\" en bas à gauche à l'écran hors combat, avec des variables configurables.","parameters":{"ReputationVariableId":"101","TeamVarCurrent":"102","TeamVarMax":"103"}},
 {"name":"PermanentDeathPartyRemoval","status":true,"description":"Retire définitivement un acteur de l'équipe lorsqu'il meurt. v1.2.0","parameters":{"removeOnlyIfInParty":"true"}},
-{"name":"CharacterCarousel","status":true,"description":"Scène de sélection de personnage (carousel) via événement - portrait, stats, description, ajout au groupe.","parameters":{"maxActors":"6","maxActorsVariableId":"0","replaceSceneHelpText":"Vous avez atteint le nombre maximum d'acteurs.\\nSélectionnez l'acteur à remplacer."}},
+{"name":"CharacterCarousel","status":true,"description":"Scène de sélection de personnage (carousel) via événement - portrait, stats, description, ajout au groupe.","parameters":{"maxActors":"6","maxActorsVariableId":"0","replaceSceneHelpText":"Vous avez atteint le nombre maximum de pokémons.\\nSélectionnez le pokémon à remplacer."}},
 {"name":"MoveAfterSkill","status":false,"description":"","parameters":{}},
 {"name":"Cbn_SrpgEnemyFirstTurn","status":true,"description":"SRPG — Phase ennemie en premier sur certaines cartes (liste d’IDs ou switch).","parameters":{"mapIdList":"42","switchId":"0","skipTurnPlusAfterOpenEnemy":"true"}},
 {"name":"test","status":false,"description":"","parameters":{}},
