@@ -230,6 +230,16 @@
         $gameVariables.setValue(deathCountVariableId, prev + 1);
         clearEntireParty();
         resetAllDatabaseActors();
+        const asg = (typeof PluginManager !== "undefined" && PluginManager.parameters)
+            ? PluginManager.parameters("ActorStatGrowthChoice")
+            : null;
+        if (
+            asg &&
+            asg.resetBonusesOnDefeatRedirect !== "false" &&
+            typeof window.cbnActorStatGrowthChoiceReset === "function"
+        ) {
+            window.cbnActorStatGrowthChoiceReset();
+        }
         const bgm = parseDefeatBgm();
         if (bgm && $gameSystem) {
             $gameSystem[pendingBgmKey] = bgm;
