@@ -64,6 +64,10 @@
  *   <projectileSpeed:30>
  *     -> Vitesse du projectile (px/frame).
  *
+ *   <projectileSpinSpeed:12>
+ *     -> Rotation du projectile sur lui-meme (degres/frame) pendant le deplacement.
+ *        0 = pas de rotation (defaut).
+ *
  *   <projectileDuration:18>
  *     -> Duree d'affichage du laser (frames).
  *
@@ -261,6 +265,7 @@
             this._laserScaleY = 1;
             this._vx = 0;
             this._vy = 0;
+            this._spinSpeed = 0;
             this._targetX = config.endX;
             this._targetY = config.endY;
             this._chargeSe = config.chargeSe || null;
@@ -306,6 +311,7 @@
 
             this._vx = Math.cos(angle) * config.speed;
             this._vy = Math.sin(angle) * config.speed;
+            this._spinSpeed = toNumberOr(config.spinSpeed, 0) * Math.PI / 180;
         }
 
         setupLaser(config) {
@@ -373,6 +379,7 @@
 
             this.x += this._vx;
             this.y += this._vy;
+            if (this._spinSpeed !== 0) this.rotation += this._spinSpeed;
 
             const reachedX = (this._vx >= 0 && this.x >= this._targetX) || (this._vx < 0 && this.x <= this._targetX);
             const reachedY = (this._vy >= 0 && this.y >= this._targetY) || (this._vy < 0 && this.y <= this._targetY);
@@ -442,6 +449,7 @@
             endX: end.x,
             endY: end.y,
             speed: Math.max(1, toNumberOr(metaValue(item, "projectileSpeed"), DEFAULT_PROJECTILE_SPEED)),
+            spinSpeed: toNumberOr(metaValue(item, "projectileSpinSpeed"), 0),
             duration: Math.max(1, toNumberOr(metaValue(item, "projectileDuration"), DEFAULT_LASER_DURATION)),
             holdFrames: Math.max(
                 0,

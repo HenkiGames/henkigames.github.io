@@ -21,6 +21,12 @@
  * @default true
  * @desc Si Oui, apres mort en phase ennemie la fenetre de remplacant ne s'ouvre qu'a la fin de la phase ennemie (srpgTurnEnd), pour eviter que la meme action ou un combo touche le remplacant.
  *
+ * @param firstExchangeSwitchId
+ * @text Interrupteur premier échange
+ * @type switch
+ * @default 116
+ * @desc Passe cet interrupteur sur ON lors du premier échange manuel réussi du joueur.
+ *
  * @help
  * Événement commun : commande plugin « Échange réserve (événement) ».
  * Pendant le map battle SRPG, le déroulé de l'événement est suspendu jusqu'au choix.
@@ -42,6 +48,7 @@
     const bxParams = PluginManager.parameters(PLUGIN_NAME);
     const DEFER_DEATH_EXCHANGE_TO_ENEMY_PHASE_END =
         bxParams.deferDeathExchangeToEnemyPhaseEnd !== "false";
+    const FIRST_EXCHANGE_SWITCH_ID = Number(bxParams.firstExchangeSwitchId || 116);
     // SRPG core utilise le symbole 'exchange' (lié à <srpgActorCommandList> avec 'swap').
     const EXCHANGE_SYMBOL = "exchange";
     const EXCHANGE_ANIMATION_ID = 40;
@@ -174,6 +181,13 @@
         if (!$gameSystem) return;
         syncExchangeUsageWithCurrentTurn();
         $gameSystem._cbnExchangeUsage.eventUsed = true;
+    }
+
+    function markFirstPlayerExchangeSwitch() {
+        if (!$gameSwitches) return;
+        if (FIRST_EXCHANGE_SWITCH_ID <= 0) return;
+        if ($gameSwitches.value(FIRST_EXCHANGE_SWITCH_ID)) return;
+        $gameSwitches.setValue(FIRST_EXCHANGE_SWITCH_ID, true);
     }
 
     function canUseExchangeCommand(actor) {
@@ -985,6 +999,7 @@
                 } else {
                     markMenuExchangeUsedThisTurn();
                 }
+                markFirstPlayerExchangeSwitch();
             }
             if ($gameParty.initRemainingActorList) {
                 $gameParty.initRemainingActorList();

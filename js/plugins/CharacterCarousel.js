@@ -53,6 +53,7 @@
   const pluginName = "CharacterCarousel";
   const rawParams = PluginManager.parameters(pluginName);
   const DEFAULT_ACTOR_IDS = [201, 202, 203];
+  const FIRST_CAROUSEL_REFUSAL_SWITCH_ID = 118;
   const EVOLUTION_META_KEY = "evolution";
   const NEW_SKILL_META_KEY = "newSkill";
   let nextActorIds = null;
@@ -82,6 +83,29 @@
       }
     }
     return maxActorsDefault;
+  }
+
+  function configuredDefaultActorIds() {
+    const teamSelection = window.TeamSelection;
+    if (teamSelection && typeof teamSelection.getCurrentActorIds === "function") {
+      const ids = teamSelection.getCurrentActorIds();
+      if (Array.isArray(ids) && ids.length > 0) {
+        return ids;
+      }
+    }
+    return DEFAULT_ACTOR_IDS;
+  }
+
+  function resolveSourceIdsFromArgs(actorIdsArg) {
+    const requestedIds = parseActorIdsArg(actorIdsArg);
+    return requestedIds.length > 0 ? requestedIds : configuredDefaultActorIds();
+  }
+
+  function markFirstCarouselRefusalSwitch() {
+    if (!$gameSwitches) return;
+    if (FIRST_CAROUSEL_REFUSAL_SWITCH_ID <= 0) return;
+    if ($gameSwitches.value(FIRST_CAROUSEL_REFUSAL_SWITCH_ID)) return;
+    $gameSwitches.setValue(FIRST_CAROUSEL_REFUSAL_SWITCH_ID, true);
   }
 
   /** Retire tous les acteurs de $gameParty (emplacements combat + réserve). */
@@ -140,11 +164,11 @@
     return s;
   }
 
-  /** Méta sur l’acteur qui part en priorité, sinon sur la forme obtenue. */
+  /** Méta sur la forme obtenue en priorité, sinon sur l’acteur qui part. */
   function getEvolutionNewSkillDisplayName(oldActorId, newActorId) {
-    const fromOld = getNewSkillNameFromActorData($dataActors[oldActorId]);
-    if (fromOld !== "") return fromOld;
-    return getNewSkillNameFromActorData($dataActors[newActorId]);
+    const fromNew = getNewSkillNameFromActorData($dataActors[newActorId]);
+    if (fromNew !== "") return fromNew;
+    return getNewSkillNameFromActorData($dataActors[oldActorId]);
   }
 
   /** La méta evolution pointe vers un acteur défini dans la base (évolution possible). */
@@ -272,14 +296,12 @@
   }
 
   PluginManager.registerCommand(pluginName, "StartCharacterSelect", args => {
-    const requestedIds = parseActorIdsArg(args.actorIds);
-    const sourceIds = requestedIds.length > 0 ? requestedIds : DEFAULT_ACTOR_IDS;
+    const sourceIds = resolveSourceIdsFromArgs(args.actorIds);
     startCarouselFromSourceIds(sourceIds, { evolution: false });
   });
 
   PluginManager.registerCommand(pluginName, "StartCharacterEvolutionSelect", args => {
-    const requestedIds = parseActorIdsArg(args.actorIds);
-    const sourceIds = requestedIds.length > 0 ? requestedIds : DEFAULT_ACTOR_IDS;
+    const sourceIds = resolveSourceIdsFromArgs(args.actorIds);
     startCarouselFromSourceIds(sourceIds, { evolution: true });
   });
 
@@ -399,7 +421,7 @@
       } else {
         this._actorIds =
           nextActorIds ||
-          shuffleArray(filterUnavailableActorIds(DEFAULT_ACTOR_IDS)).slice(0, 3);
+          shuffleArray(filterUnavailableActorIds(configuredDefaultActorIds())).slice(0, 3);
         this._evolutionMode = evolutionCarouselMode;
         evolutionCarouselMode = false;
         this._fullListMode = fullListCarouselMode;
@@ -500,6 +522,7 @@
     onCancelCarousel() {
       if (!this._canCancelCarousel) return;
       SoundManager.playCancel();
+      markFirstCarouselRefusalSwitch();
       $gameVariables.setValue(110, 0);
       SceneManager.pop();
     }
