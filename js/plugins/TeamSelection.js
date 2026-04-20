@@ -78,6 +78,7 @@
  * - actorUnlocks: acteurs supplementaires debloques via interrupteurs.
  * - lockedImage: image d'attente pour equipe verrouillee.
  * - lockedDescription: description affichee tant que l'equipe est verrouillee.
+ * - Etoiles: progression visuelle bronze/argent/or par equipe via variable ou interrupteurs.
  */
 
 /*~struct~TeamConfig:
@@ -136,6 +137,30 @@
  * @text Description verrouillee
  * @type note
  * @default ""
+ *
+ * @param starProgressVariableId
+ * @text Variable progression etoiles
+ * @type variable
+ * @default 0
+ * @desc 0=ignoree. Valeur 0..3 (0 rien, 1 bronze, 2 bronze+argent, 3 bronze+argent+or).
+ *
+ * @param bronzeStarSwitchId
+ * @text Interrupteur etoile bronze
+ * @type switch
+ * @default 0
+ * @desc Utilise seulement si la variable progression vaut 0.
+ *
+ * @param silverStarSwitchId
+ * @text Interrupteur etoile argent
+ * @type switch
+ * @default 0
+ * @desc Utilise seulement si la variable progression vaut 0.
+ *
+ * @param goldStarSwitchId
+ * @text Interrupteur etoile or
+ * @type switch
+ * @default 0
+ * @desc Utilise seulement si la variable progression vaut 0.
  */
 
 /*~struct~ActorUnlockConfig:
@@ -221,7 +246,11 @@
         description: String(teamData.description || ""),
         unlockSwitchId: Number(teamData.unlockSwitchId || 0) || 0,
         lockedImage: String(teamData.lockedImage || "").trim(),
-        lockedDescription: String(teamData.lockedDescription || "")
+        lockedDescription: String(teamData.lockedDescription || ""),
+        starProgressVariableId: Number(teamData.starProgressVariableId || 0) || 0,
+        bronzeStarSwitchId: Number(teamData.bronzeStarSwitchId || 0) || 0,
+        silverStarSwitchId: Number(teamData.silverStarSwitchId || 0) || 0,
+        goldStarSwitchId: Number(teamData.goldStarSwitchId || 0) || 0
       });
     }
     return out;
@@ -321,6 +350,23 @@
     return !!team && isTeamUnlocked(team);
   }
 
+  function getTeamStarCount(team) {
+    if (!team || !isTeamUnlocked(team)) return 0;
+
+    if (team.starProgressVariableId > 0 && $gameVariables) {
+      const rawValue = Number($gameVariables.value(team.starProgressVariableId) || 0);
+      const clamped = Math.max(0, Math.min(3, Math.floor(rawValue)));
+      return clamped;
+    }
+
+    if (!$gameSwitches) return 0;
+    let count = 0;
+    if (team.bronzeStarSwitchId > 0 && $gameSwitches.value(team.bronzeStarSwitchId)) count += 1;
+    if (team.silverStarSwitchId > 0 && $gameSwitches.value(team.silverStarSwitchId)) count += 1;
+    if (team.goldStarSwitchId > 0 && $gameSwitches.value(team.goldStarSwitchId)) count += 1;
+    return count;
+  }
+
   function getCurrentTeam() {
     const selectedId = ensureSelectedTeamId();
     return findTeamById(selectedId);
@@ -348,6 +394,38 @@
   function getCurrentTeamName() {
     const team = getCurrentTeam();
     return team ? team.name : "";
+  }
+
+  function resolveTeamFromSelectedVariable() {
+    if (!$gameVariables) return null;
+    const rawTeamId = $gameVariables.value(selectedTeamVariableId);
+    let team = findTeamById(rawTeamId);
+    if (team) return team;
+
+    const numericTeamId = Number(rawTeamId);
+    if (Number.isFinite(numericTeamId)) {
+      team = teams.find(candidate => Number(candidate.id) === numericTeamId) || null;
+      if (team) return team;
+
+      const index = Math.floor(numericTeamId);
+      if (index >= 0 && index < teams.length) {
+        return teams[index];
+      }
+    }
+
+    return getCurrentTeam();
+  }
+
+  function incrementTeamStarProgressFromSelectedVariable() {
+    const team = resolveTeamFromSelectedVariable();
+    if (!team) return false;
+    const progressVariableId = Number(team.starProgressVariableId || 0);
+    if (progressVariableId <= 0) return false;
+    if (!$gameVariables) return false;
+    const currentValue = Number($gameVariables.value(progressVariableId) || 0);
+    const nextValue = Math.max(0, Math.min(3, Math.floor(currentValue) + 1));
+    $gameVariables.setValue(progressVariableId, nextValue);
+    return true;
   }
 
   function isActorUnlockActive(actorUnlock) {
@@ -691,7 +769,26 @@
       this._nameWindow.contents.clear();
       this._nameWindow.contents.fontSize = 30;
       const displayName = isTeamUnlocked(team) ? (team.name || team.id) : "?";
-      this._nameWindow.drawText(displayName, 0, 6, this._nameWindow.innerWidth, "left");
+      const starsWidth = 120;
+      const starsStartX = this._nameWindow.innerWidth - starsWidth;
+      const stars = [
+        { color: "#cd7f32" }, // bronze
+        { color: "#c0c0c0" }, // argent
+        { color: "#ffd700" }  // or
+      ];
+      const step = 36;
+      const glyphWidth = 24;
+      const starsBaseX = starsStartX + Math.floor((starsWidth - step * (stars.length - 1) - glyphWidth) / 2);
+      const starsY = 8;
+      const starsToShow = getTeamStarCount(team);
+
+      this._nameWindow.drawText(displayName, 0, 6, starsStartX - 8, "left");
+
+      for (let i = 0; i < starsToShow; i++) {
+        this._nameWindow.contents.textColor = stars[i].color;
+        this._nameWindow.contents.drawText("★", starsBaseX + i * step, starsY, glyphWidth, 30, "center");
+      }
+      this._nameWindow.resetTextColor();
       this._nameWindow.contents.fontSize = $gameSystem.mainFontSize();
     }
 
@@ -820,6 +917,7 @@
     getCurrentTeamId,
     getCurrentTeamIdAsNumber,
     getCurrentActorIds,
+    incrementTeamStarProgressFromSelectedVariable,
     isTeamUnlocked: teamId => isTeamUnlocked(findTeamById(teamId)),
     setSelectedTeam,
     selectTeamByIndex
