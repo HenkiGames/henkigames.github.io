@@ -78,7 +78,7 @@
  * - actorUnlocks: acteurs supplementaires debloques via interrupteurs.
  * - lockedImage: image d'attente pour equipe verrouillee.
  * - lockedDescription: description affichee tant que l'equipe est verrouillee.
- * - Etoiles: progression visuelle bronze/argent/or par equipe via variable ou interrupteurs.
+ * - Etoiles: progression visuelle bronze/argent/or + 2 diamants par equipe via variable ou interrupteurs.
  */
 
 /*~struct~TeamConfig:
@@ -142,7 +142,7 @@
  * @text Variable progression etoiles
  * @type variable
  * @default 0
- * @desc 0=ignoree. Valeur 0..3 (0 rien, 1 bronze, 2 bronze+argent, 3 bronze+argent+or).
+ * @desc 0=ignoree. Valeur 0..5 (0 rien, puis bronze, argent, or, diamant 1, diamant 2).
  *
  * @param bronzeStarSwitchId
  * @text Interrupteur etoile bronze
@@ -158,6 +158,18 @@
  *
  * @param goldStarSwitchId
  * @text Interrupteur etoile or
+ * @type switch
+ * @default 0
+ * @desc Utilise seulement si la variable progression vaut 0.
+ *
+ * @param diamondStarSwitchId
+ * @text Interrupteur etoile diamant (1)
+ * @type switch
+ * @default 0
+ * @desc Utilise seulement si la variable progression vaut 0.
+ *
+ * @param diamondStar2SwitchId
+ * @text Interrupteur etoile diamant (2)
  * @type switch
  * @default 0
  * @desc Utilise seulement si la variable progression vaut 0.
@@ -182,6 +194,8 @@
 
   const pluginName = "TeamSelection";
   const params = PluginManager.parameters(pluginName);
+  /** Nombre max d'etoiles affichees (bronze, argent, or, diamant x2). */
+  const MAX_TEAM_STAR_COUNT = 5;
 
   function parseActorIds(rawValue) {
     if (!rawValue) return [];
@@ -250,7 +264,9 @@
         starProgressVariableId: Number(teamData.starProgressVariableId || 0) || 0,
         bronzeStarSwitchId: Number(teamData.bronzeStarSwitchId || 0) || 0,
         silverStarSwitchId: Number(teamData.silverStarSwitchId || 0) || 0,
-        goldStarSwitchId: Number(teamData.goldStarSwitchId || 0) || 0
+        goldStarSwitchId: Number(teamData.goldStarSwitchId || 0) || 0,
+        diamondStarSwitchId: Number(teamData.diamondStarSwitchId || 0) || 0,
+        diamondStar2SwitchId: Number(teamData.diamondStar2SwitchId || 0) || 0
       });
     }
     return out;
@@ -355,7 +371,7 @@
 
     if (team.starProgressVariableId > 0 && $gameVariables) {
       const rawValue = Number($gameVariables.value(team.starProgressVariableId) || 0);
-      const clamped = Math.max(0, Math.min(3, Math.floor(rawValue)));
+      const clamped = Math.max(0, Math.min(MAX_TEAM_STAR_COUNT, Math.floor(rawValue)));
       return clamped;
     }
 
@@ -364,7 +380,37 @@
     if (team.bronzeStarSwitchId > 0 && $gameSwitches.value(team.bronzeStarSwitchId)) count += 1;
     if (team.silverStarSwitchId > 0 && $gameSwitches.value(team.silverStarSwitchId)) count += 1;
     if (team.goldStarSwitchId > 0 && $gameSwitches.value(team.goldStarSwitchId)) count += 1;
-    return count;
+    if (team.diamondStarSwitchId > 0 && $gameSwitches.value(team.diamondStarSwitchId)) count += 1;
+    if (team.diamondStar2SwitchId > 0 && $gameSwitches.value(team.diamondStar2SwitchId)) count += 1;
+    return Math.min(count, MAX_TEAM_STAR_COUNT);
+  }
+
+  /**
+   * Dessine une etoile avec un degrade horizontal arc-en-ciel (HSL) via decoupe canvas.
+   */
+  function drawRainbowStarGlyph(contents, x, y, maxWidth, lineHeight, align) {
+    const steps = 28;
+    const segW = maxWidth / steps;
+    const savedTextColor = contents.textColor;
+    const savedOutlineColor = contents.outlineColor;
+    const savedOutlineWidth = contents.outlineWidth;
+    contents.outlineWidth = Math.min(savedOutlineWidth, 2);
+    contents.outlineColor = "rgba(0, 0, 0, 0.55)";
+    const ctx = contents.context;
+    const last = Math.max(1, steps - 1);
+    for (let s = 0; s < steps; s++) {
+      const hue = Math.round((s / last) * 360);
+      contents.textColor = `hsl(${hue}, 92%, 54%)`;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(Math.floor(x + s * segW), y, Math.ceil(segW) + 1, lineHeight);
+      ctx.clip();
+      contents.drawText("★", x, y, maxWidth, lineHeight, align);
+      ctx.restore();
+    }
+    contents.textColor = savedTextColor;
+    contents.outlineColor = savedOutlineColor;
+    contents.outlineWidth = savedOutlineWidth;
   }
 
   function getCurrentTeam() {
@@ -423,7 +469,7 @@
     if (progressVariableId <= 0) return false;
     if (!$gameVariables) return false;
     const currentValue = Number($gameVariables.value(progressVariableId) || 0);
-    const nextValue = Math.max(0, Math.min(3, Math.floor(currentValue) + 1));
+    const nextValue = Math.max(0, Math.min(MAX_TEAM_STAR_COUNT, Math.floor(currentValue) + 1));
     $gameVariables.setValue(progressVariableId, nextValue);
     return true;
   }
@@ -769,12 +815,14 @@
       this._nameWindow.contents.clear();
       this._nameWindow.contents.fontSize = 30;
       const displayName = isTeamUnlocked(team) ? (team.name || team.id) : "?";
-      const starsWidth = 120;
+      const starsWidth = 200;
       const starsStartX = this._nameWindow.innerWidth - starsWidth;
       const stars = [
-        { color: "#cd7f32" }, // bronze
-        { color: "#c0c0c0" }, // argent
-        { color: "#ffd700" }  // or
+        { color: "#cd7f32" },
+        { color: "#c0c0c0" },
+        { color: "#ffd700" },
+        { color: "#62FCF5" },
+        { color: "#62FCF5" }
       ];
       const step = 36;
       const glyphWidth = 24;
@@ -784,9 +832,15 @@
 
       this._nameWindow.drawText(displayName, 0, 6, starsStartX - 8, "left");
 
+      const lastStarIndex = stars.length - 1;
       for (let i = 0; i < starsToShow; i++) {
-        this._nameWindow.contents.textColor = stars[i].color;
-        this._nameWindow.contents.drawText("★", starsBaseX + i * step, starsY, glyphWidth, 30, "center");
+        const sx = starsBaseX + i * step;
+        if (i === lastStarIndex) {
+          drawRainbowStarGlyph(this._nameWindow.contents, sx, starsY, glyphWidth, 30, "center");
+        } else {
+          this._nameWindow.contents.textColor = stars[i].color;
+          this._nameWindow.contents.drawText("★", sx, starsY, glyphWidth, 30, "center");
+        }
       }
       this._nameWindow.resetTextColor();
       this._nameWindow.contents.fontSize = $gameSystem.mainFontSize();
