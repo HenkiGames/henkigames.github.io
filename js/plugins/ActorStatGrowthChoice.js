@@ -83,6 +83,39 @@
  * @text Réinitialiser tous les bonus (stats / xparam / vol de vie)
  * @desc Vide les bonus cumulés par lignée d’évolution et sur les instances d’acteurs. À appeler au début d’une nouvelle run si besoin.
  *
+ * @command openStateChoice
+ * @text Ouvrir le choix d'états (1 parmi 3)
+ * @desc Affiche 3 cartes d'états tirées depuis stateIds. Le choix applique l'état à l'acteur cible.
+ *
+ * @arg actorTargetMode
+ * @text Cible acteur
+ * @type select
+ * @option Utiliser le réglage du plugin
+ * @value
+ * @option Acteur du menu
+ * @value menu
+ * @option Chef de groupe
+ * @value leader
+ * @option ID acteur = variable de jeu
+ * @value variable
+ * @default
+ *
+ * @arg actorVariableId
+ * @text Variable ID acteur (si « variable »)
+ * @type variable
+ * @default 0
+ * @desc Si 0 et mode variable : utilise le paramètre du plugin.
+ *
+ * @arg stateIds
+ * @text IDs états (obligatoire)
+ * @type string
+ * @default
+ * @desc CSV ou JSON. Ex: 10,11,12,13 ou [10,11,12,13]
+ *
+ * @command resetChosenStates
+ * @text Réinitialiser les états choisis persistants
+ * @desc Vide la mémoire des états choisis via openStateChoice (réappliqués au start SRPG).
+ *
  * @help
  * Bonus stockés par « racine » de lignée d’évolution (balises evolution / evolutionId sur les acteurs) : toutes les formes partagent les mêmes bonus.
  * Réinitialisation : paramètres Game Over / défaite hub, ou commande « Réinitialiser tous les bonus ».
@@ -134,6 +167,7 @@
   /** Données passées à la prochaine `SceneManager.push(Scene_StatGrowthChoice)` (push attend une classe, pas une instance). */
   let _pendingStatChoiceActor = null;
   let _pendingStatChoices = null;
+  let _pendingStateChoices = null;
 
   //---------------------------------------------------------------------------
   // Pool & parsing
@@ -264,7 +298,7 @@
     ];
   }
 
-  function shuffleAndPickThree(pool) {
+  function shuffleAndPick(pool, count) {
     const src = pool.slice();
     for (let i = src.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -272,8 +306,38 @@
       src[i] = src[j];
       src[j] = t;
     }
-    const n = Math.min(3, src.length);
+    const wanted = Number.isInteger(count) && count > 0 ? count : 1;
+    const n = Math.min(wanted, src.length);
     return src.slice(0, n);
+  }
+
+  function shuffleAndPickThree(pool) {
+    return shuffleAndPick(pool, 3);
+  }
+
+  function parseIdListFlexible(rawValue) {
+    if (!rawValue) return [];
+    try {
+      const parsed = JSON.parse(String(rawValue));
+      if (Array.isArray(parsed)) {
+        return parsed.map(Number).filter(id => Number.isInteger(id) && id > 0);
+      }
+      if (typeof parsed === "number") {
+        return Number.isInteger(parsed) && parsed > 0 ? [parsed] : [];
+      }
+      if (typeof parsed === "string") {
+        return parsed
+          .split(",")
+          .map(s => Number(s.trim()))
+          .filter(id => Number.isInteger(id) && id > 0);
+      }
+    } catch (_e) {
+      // fallback CSV
+    }
+    return String(rawValue)
+      .split(",")
+      .map(s => Number(s.trim()))
+      .filter(id => Number.isInteger(id) && id > 0);
   }
 
   //---------------------------------------------------------------------------
@@ -424,6 +488,105 @@
     }
   }
 
+  function ensurePersistentChosenStatesRoot() {
+    if (!$gameSystem) return;
+    if (
+      !$gameSystem._cbnPersistentChosenStatesByRoot ||
+      typeof $gameSystem._cbnPersistentChosenStatesByRoot !== "object"
+    ) {
+      $gameSystem._cbnPersistentChosenStatesByRoot = {};
+    }
+  }
+
+  function getPersistentChosenStatesForRoot(rootId) {
+    ensurePersistentChosenStatesRoot();
+    const key = String(rootId);
+    const store = $gameSystem._cbnPersistentChosenStatesByRoot;
+    if (!Array.isArray(store[key])) {
+      store[key] = [];
+    }
+    return store[key];
+  }
+
+  function rememberChosenStateForActor(actor, stateId) {
+    if (!actor || !Number.isInteger(stateId) || stateId <= 0) return;
+    if (!$dataStates || !$dataStates[stateId]) return;
+    const rootId = getEvolutionRootId(actor.actorId());
+    const list = getPersistentChosenStatesForRoot(rootId);
+    if (!list.includes(stateId)) {
+      list.push(stateId);
+    }
+  }
+
+  function applyPersistentChosenStatesToActor(actor) {
+    if (!actor) return;
+    const rootId = getEvolutionRootId(actor.actorId());
+    const list = getPersistentChosenStatesForRoot(rootId);
+    for (const stateId of list) {
+      if (!Number.isInteger(stateId) || stateId <= 0) continue;
+      if (!$dataStates || !$dataStates[stateId]) continue;
+      actor.addState(stateId);
+    }
+  }
+
+  function reapplyPersistentChosenStatesOnSrpgStart() {
+    if (!$gameParty || typeof $gameParty.allMembers !== "function") return;
+    const members = $gameParty.allMembers();
+    for (const actor of members) {
+      if (!actor || !actor.isActor || !actor.isActor()) continue;
+      applyPersistentChosenStatesToActor(actor);
+      actor.refresh();
+    }
+  }
+
+  function resetPersistentChosenStates() {
+    if ($gameSystem) {
+      $gameSystem._cbnPersistentChosenStatesByRoot = {};
+    }
+  }
+
+  function extractStateDescription(stateData) {
+    if (!stateData) return "";
+    const note = String(stateData.note || "");
+    const explicitMatch = note.match(/<description\s*:\s*([^>]+)>/i);
+    if (explicitMatch && explicitMatch[1]) {
+      return String(explicitMatch[1]).trim();
+    }
+    const noteWithoutTags = note.replace(/<[^>]*>/g, "");
+    const lines = noteWithoutTags
+      .split(/\r?\n/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    return lines.slice(0, 2).join("\n");
+  }
+
+  function parseStateChoicePool(rawStateIds) {
+    const ids = parseIdListFlexible(rawStateIds);
+    const seen = new Set();
+    const out = [];
+    for (const stateId of ids) {
+      if (seen.has(stateId)) continue;
+      seen.add(stateId);
+      const stateData = $dataStates[stateId];
+      if (!stateData) continue;
+      out.push({
+        stateId,
+        title: String(stateData.name || `État ${stateId}`),
+        description: extractStateDescription(stateData),
+        iconIndex: Number(stateData.iconIndex || 0)
+      });
+    }
+    return out;
+  }
+
+  function removeAlreadyChosenStatesForActor(actor, pool) {
+    if (!actor || !actor.isActor || !actor.isActor()) return pool.slice();
+    if (!Array.isArray(pool) || pool.length === 0) return [];
+    const rootId = getEvolutionRootId(actor.actorId());
+    const chosen = new Set(getPersistentChosenStatesForRoot(rootId));
+    return pool.filter(entry => entry && !chosen.has(Number(entry.stateId)));
+  }
+
   //---------------------------------------------------------------------------
   // Hooks Game_Actor / Game_Party
   //---------------------------------------------------------------------------
@@ -466,6 +629,29 @@
     }
     return v;
   };
+
+  function lineageParamBonus(actor, paramId) {
+    if (!actor || !actor.isActor || !actor.isActor()) return 0;
+    if (!Number.isInteger(paramId) || paramId < 0 || paramId > 7) return 0;
+    migrateLegacyInstanceToLineage(actor);
+    const st = ensureLineageStore(getEvolutionRootId(actor.actorId()));
+    return Number(st.s[paramId] || 0);
+  }
+
+  function lineageXparamBonus(actor, xparamId) {
+    if (!actor || !actor.isActor || !actor.isActor()) return 0;
+    if (!Number.isInteger(xparamId) || xparamId < 0 || xparamId > 9) return 0;
+    migrateLegacyInstanceToLineage(actor);
+    const st = ensureLineageStore(getEvolutionRootId(actor.actorId()));
+    return Number(st.x[xparamId] || 0);
+  }
+
+  function lineageLifeStealRate(actor) {
+    if (!actor || !actor.isActor || !actor.isActor()) return 0;
+    migrateLegacyInstanceToLineage(actor);
+    const st = ensureLineageStore(getEvolutionRootId(actor.actorId()));
+    return Number(st.ls || 0);
+  }
 
   //---------------------------------------------------------------------------
   // PartyEvolutionSelect : fusion des vieux bonus instance → lignée avant swap
@@ -522,6 +708,13 @@
   Game_System.prototype.initialize = function() {
     _Game_System_initialize.call(this);
     this._cbnLineageGrowth = {};
+    this._cbnPersistentChosenStatesByRoot = {};
+  };
+
+  const _Game_System_startSRPG_cbnStateChoice = Game_System.prototype.startSRPG;
+  Game_System.prototype.startSRPG = function() {
+    _Game_System_startSRPG_cbnStateChoice.call(this);
+    reapplyPersistentChosenStatesOnSrpgStart();
   };
 
   //---------------------------------------------------------------------------
@@ -631,6 +824,161 @@
     this.drawText(ch.label, rect.x, rect.y, rect.width);
   };
 
+  function Window_StateChoiceCards() {
+    this.initialize(...arguments);
+  }
+
+  Window_StateChoiceCards.prototype = Object.create(Window_Selectable.prototype);
+  Window_StateChoiceCards.prototype.constructor = Window_StateChoiceCards;
+
+  Window_StateChoiceCards.prototype.initialize = function(rect) {
+    this._choices = [];
+    Window_Selectable.prototype.initialize.call(this, rect);
+    this.refresh();
+  };
+
+  Window_StateChoiceCards.prototype.setChoices = function(choices) {
+    this._choices = choices || [];
+    this.refresh();
+    this.select(0);
+  };
+
+  Window_StateChoiceCards.prototype.maxItems = function() {
+    return this._choices.length;
+  };
+
+  Window_StateChoiceCards.prototype.maxCols = function() {
+    return 1;
+  };
+
+  Window_StateChoiceCards.prototype.rowSpacing = function() {
+    return 10;
+  };
+
+  Window_StateChoiceCards.prototype.itemWidth = function() {
+    return this.innerWidth;
+  };
+
+  Window_StateChoiceCards.prototype.itemHeight = function() {
+    const count = Math.max(1, this.maxItems());
+    const totalSpacing = this.rowSpacing() * Math.max(0, count - 1);
+    const byAvailableSpace = Math.floor((this.innerHeight - totalSpacing) / count);
+    const minForThreeDescLines = this.lineHeight() * 4 + 26; // 1 ligne titre + 3 lignes desc + marges
+    return Math.max(minForThreeDescLines, byAvailableSpace);
+  };
+
+  Window_StateChoiceCards.prototype.item = function() {
+    return this._choices[this.index()];
+  };
+
+  Window_StateChoiceCards.prototype.wrapCardText = function(text, maxWidth, maxLines) {
+    const source = String(text || "").replace(/\r/g, "");
+    const paragraphs = source.split("\n");
+    const lines = [];
+
+    for (const paragraph of paragraphs) {
+      const words = paragraph.split(/\s+/).filter(Boolean);
+      if (words.length === 0) {
+        lines.push("");
+        if (lines.length >= maxLines) break;
+        continue;
+      }
+
+      let current = "";
+      for (const word of words) {
+        const next = current ? `${current} ${word}` : word;
+        if (this.textWidth(next) <= maxWidth) {
+          current = next;
+          continue;
+        }
+
+        if (current) {
+          lines.push(current);
+          if (lines.length >= maxLines) break;
+          current = word;
+          if (this.textWidth(current) <= maxWidth) continue;
+        }
+
+        // Mot plus large que la carte : découpe caractère par caractère.
+        let chunk = "";
+        for (const char of word) {
+          const trial = chunk + char;
+          if (this.textWidth(trial) <= maxWidth) {
+            chunk = trial;
+          } else {
+            if (chunk) {
+              lines.push(chunk);
+              if (lines.length >= maxLines) break;
+            }
+            chunk = char;
+          }
+        }
+        if (lines.length >= maxLines) break;
+        current = chunk;
+      }
+
+      if (lines.length >= maxLines) break;
+      if (current) {
+        lines.push(current);
+        if (lines.length >= maxLines) break;
+      }
+    }
+
+    if (lines.length > maxLines) {
+      lines.length = maxLines;
+    }
+    return lines;
+  };
+
+  Window_StateChoiceCards.prototype.drawWrappedCardText = function(text, x, y, width, maxLines) {
+    const lines = this.wrapCardText(text, width, maxLines);
+    for (let i = 0; i < lines.length; i++) {
+      this.drawText(lines[i], x, y + i * this.lineHeight(), width, "left");
+    }
+  };
+
+  Window_StateChoiceCards.prototype.drawItem = function(index) {
+    const ch = this._choices[index];
+    if (!ch) return;
+    const rect = this.itemRect(index);
+    const pad = 8;
+    const x = rect.x + pad;
+    const y = rect.y + pad;
+    const w = rect.width - pad * 2;
+    const h = rect.height - pad * 2;
+
+    this.contents.fillRect(x, y, w, h, "rgba(20, 20, 24, 0.78)");
+    this.contents.strokeRect(x, y, w, h, "rgba(255, 255, 255, 0.75)");
+    this.changeTextColor(ColorManager.systemColor());
+    const titleText = `${String(ch.title || "")} :`;
+    const iconIndex = Number(ch.iconIndex || 0);
+    const hasIcon = iconIndex > 0;
+    const titleTextW = this.textWidth(titleText);
+    const iconW = hasIcon ? ImageManager.iconWidth : 0;
+    const gap = hasIcon ? 6 : 0;
+    const combinedW = titleTextW + gap + iconW;
+    const blockStartX = x + 10;
+    const titleY = y + 6;
+    if (hasIcon) {
+      const iconX = blockStartX;
+      const iconY = titleY + Math.floor((this.lineHeight() - ImageManager.iconHeight) / 2);
+      this.drawIcon(iconIndex, iconX, iconY);
+      this.drawText(titleText, blockStartX + iconW + gap, titleY, w - 24 - iconW - gap, "left");
+    } else {
+      this.drawText(titleText, blockStartX, titleY, w - 24, "left");
+    }
+    this.resetTextColor();
+
+    const descY = y + this.lineHeight() + 14;
+    const desc = ch.description && ch.description.trim()
+      ? ch.description
+      : "Aucune description.";
+    const textX = x + 10;
+    const textW = w - 20;
+    const maxDescLines = Math.max(2, Math.floor((h - (descY - y) - 8) / this.lineHeight()));
+    this.drawWrappedCardText(desc, textX, descY, textW, maxDescLines);
+  };
+
   function Scene_StatGrowthChoice() {
     this.initialize(...arguments);
   }
@@ -712,6 +1060,168 @@
   };
 
   //---------------------------------------------------------------------------
+  // UI Statut : afficher les bonus de stats sélectionnées
+  //---------------------------------------------------------------------------
+
+  function formatPercent(rate) {
+    const pct = Math.round((Number(rate) || 0) * 10000) / 100;
+    return `${pct}%`;
+  }
+
+  const _Window_Status_drawBasicInfo_cbnGrowth = Window_Status.prototype.drawBasicInfo;
+  Window_Status.prototype.drawBasicInfo = function(x, y) {
+    _Window_Status_drawBasicInfo_cbnGrowth.call(this, x, y);
+    if (!this._actor) return;
+    const hpBonus = lineageParamBonus(this._actor, 0);
+    if (!Number.isFinite(hpBonus) || hpBonus === 0) return;
+    const lineHeight = this.lineHeight();
+    const sign = hpBonus > 0 ? "+" : "";
+    const bonusText = `(${sign}${hpBonus})`;
+    this.changeTextColor(ColorManager.powerUpColor());
+    // Aligne le bonus sur la ligne HP des jauges dans la fenetre de statut.
+    this.drawText(bonusText, x + 190, y + lineHeight * 2, 120, "right");
+    this.resetTextColor();
+  };
+
+  Window_Status.prototype.drawBlock2 = function() {
+    const y = this.block2Y();
+    this.drawActorFace(this._actor, 12, y);
+    // On conserve uniquement les infos de base (niveau, icones, jauges).
+    // Les blocs "Total XP" et "Prochain niveau" sont volontairement supprimes.
+    this.drawBasicInfo(204, y);
+  };
+
+  Window_StatusParams.prototype.drawItem = function(index) {
+    if (!this._actor) return;
+
+    const rect = this.itemLineRect(index);
+    let name = "";
+    let value = "";
+    let bonusText = "";
+
+    if (index <= 3) {
+      const paramId = index + 2; // ATK, DEF, MAT, MDF
+      const paramValue = this._actor.param(paramId);
+      const bonus = lineageParamBonus(this._actor, paramId);
+      name = TextManager.param(paramId);
+      value = String(paramValue);
+      if (Number.isFinite(bonus) && bonus !== 0) {
+        const sign = bonus > 0 ? "+" : "";
+        bonusText = `(${sign}${bonus})`;
+      }
+    } else if (index === 4) {
+      const lsRate = lineageLifeStealRate(this._actor);
+      name = "Vol de vie";
+      value = formatPercent(lsRate);
+    } else if (index === 5) {
+      const critTotal = this._actor.xparam(2);
+      const critBonus = lineageXparamBonus(this._actor, 2);
+      name = "CC";
+      value = formatPercent(critTotal);
+      if (Number.isFinite(critBonus) && critBonus !== 0) {
+        const sign = critBonus > 0 ? "+" : "";
+        bonusText = `(${sign}${formatPercent(critBonus)})`;
+      }
+    }
+
+    this.changeTextColor(ColorManager.systemColor());
+    this.drawText(name, rect.x, rect.y, 160);
+    this.resetTextColor();
+    this.drawText(value, rect.x + 160, rect.y, 70, "right");
+    if (bonusText) {
+      this.changeTextColor(ColorManager.powerUpColor());
+      this.drawText(bonusText, rect.x + 235, rect.y, 110, "left");
+      this.resetTextColor();
+    }
+  };
+
+  //---------------------------------------------------------------------------
+  // UI Statut : élargir la colonne stats + afficher les compétences à droite
+  //---------------------------------------------------------------------------
+
+  function Window_StatusAllSkills() {
+    this.initialize(...arguments);
+  }
+
+  Window_StatusAllSkills.prototype = Object.create(Window_SkillList.prototype);
+  Window_StatusAllSkills.prototype.constructor = Window_StatusAllSkills;
+
+  Window_StatusAllSkills.prototype.initialize = function(rect) {
+    Window_SkillList.prototype.initialize.call(this, rect);
+    this._actor = null;
+  };
+
+  Window_StatusAllSkills.prototype.includes = function(item) {
+    return !!item;
+  };
+
+  Window_StatusAllSkills.prototype.isEnabled = function(/*item*/) {
+    return true;
+  };
+
+  const _Scene_Status_statusParamsWidth = Scene_Status.prototype.statusParamsWidth;
+  Scene_Status.prototype.statusParamsWidth = function() {
+    const base = _Scene_Status_statusParamsWidth.call(this);
+    return base + 40;
+  };
+
+  const _Scene_Status_profileHeight = Scene_Status.prototype.profileHeight;
+  Scene_Status.prototype.profileHeight = function() {
+    // Plus de place en bas pour la description des compétences:
+    // on réduit le premier bloc et on remonte stats/compétences.
+    const base = _Scene_Status_profileHeight.call(this);
+    const oneLine = this.calcWindowHeight(1, false) - this.calcWindowHeight(0, false);
+    return base + oneLine * 2;
+  };
+
+  Scene_Status.prototype.createStatusEquipWindow = function() {
+    const rect = this.statusEquipWindowRect();
+    this._statusEquipWindow = new Window_StatusAllSkills(rect);
+    this._statusEquipWindow.setHelpWindow(this._profileWindow);
+    this._statusEquipWindow.setHandler("ok", this.onStatusSkillOk.bind(this));
+    this._statusEquipWindow.setHandler("cancel", this.popScene.bind(this));
+    this._statusEquipWindow.setHandler("pagedown", this.nextActor.bind(this));
+    this._statusEquipWindow.setHandler("pageup", this.previousActor.bind(this));
+    this.addWindow(this._statusEquipWindow);
+  };
+
+  Scene_Status.prototype.onStatusSkillOk = function() {
+    // Fenêtre purement informative : on garde la sélection active pour lire la description.
+    if (this._statusEquipWindow) {
+      this._statusEquipWindow.activate();
+    }
+  };
+
+  const _Scene_Status_start = Scene_Status.prototype.start;
+  Scene_Status.prototype.start = function() {
+    _Scene_Status_start.call(this);
+    if (this._statusWindow) this._statusWindow.deactivate();
+    if (this._statusEquipWindow) {
+      this._statusEquipWindow.activate();
+      this._statusEquipWindow.select(0);
+    }
+  };
+
+  const _Scene_Status_refreshActor = Scene_Status.prototype.refreshActor;
+  Scene_Status.prototype.refreshActor = function() {
+    _Scene_Status_refreshActor.call(this);
+    if (this._statusEquipWindow) {
+      this._statusEquipWindow.activate();
+      this._statusEquipWindow.select(0);
+    }
+  };
+
+  const _Scene_Status_onActorChange = Scene_Status.prototype.onActorChange;
+  Scene_Status.prototype.onActorChange = function() {
+    _Scene_Status_onActorChange.call(this);
+    if (this._statusWindow) this._statusWindow.deactivate();
+    if (this._statusEquipWindow) {
+      this._statusEquipWindow.activate();
+      this._statusEquipWindow.select(0);
+    }
+  };
+
+  //---------------------------------------------------------------------------
   // API commande plugin
   //---------------------------------------------------------------------------
 
@@ -736,9 +1246,108 @@
     const three = shuffleAndPickThree(pool.length > 0 ? pool : fallbackPool());
     _pendingStatChoiceActor = actor;
     _pendingStatChoices = three;
+    _pendingStateChoices = null;
     attachInterpreterWait(interpreter);
     SceneManager.push(Scene_StatGrowthChoice);
   }
+
+  function openStateChoiceScene(interpreter, options) {
+    patchEvolutionParty();
+    const opt = options || {};
+    const mode = opt.actorTargetMode != null && opt.actorTargetMode !== "" ? opt.actorTargetMode : null;
+    const varId = Number(opt.actorVariableId) || 0;
+    const actor = resolveTargetActor(mode, varId);
+    const pool = parseStateChoicePool(opt.stateIds);
+    const filteredPool = removeAlreadyChosenStatesForActor(actor, pool);
+    const three = shuffleAndPick(filteredPool, 3);
+    _pendingStatChoiceActor = actor;
+    _pendingStatChoices = null;
+    _pendingStateChoices = three;
+    attachInterpreterWait(interpreter);
+    SceneManager.push(Scene_StateChoice);
+  }
+
+  function Scene_StateChoice() {
+    this.initialize(...arguments);
+  }
+
+  Scene_StateChoice.prototype = Object.create(Scene_MenuBase.prototype);
+  Scene_StateChoice.prototype.constructor = Scene_StateChoice;
+
+  Scene_StateChoice.prototype.initialize = function() {
+    Scene_MenuBase.prototype.initialize.call(this);
+    this._targetActor = _pendingStatChoiceActor;
+    this._pickedChoices = (_pendingStateChoices || []).slice();
+    _pendingStatChoiceActor = null;
+    _pendingStateChoices = null;
+    _pendingStatChoices = null;
+  };
+
+  Scene_StateChoice.prototype.create = function() {
+    Scene_MenuBase.prototype.create.call(this);
+    this.createHelpWindow();
+    this.createChoiceWindow();
+    if (this._cancelButton) {
+      this._cancelButton.setClickHandler(this.onChoiceCancel.bind(this));
+    }
+  };
+
+  Scene_StateChoice.prototype.start = function() {
+    Scene_MenuBase.prototype.start.call(this);
+    const actor = this._targetActor;
+    if (!actor || !this._pickedChoices.length) {
+      SoundManager.playBuzzer();
+      this.popScene();
+      return;
+    }
+    const name = actor.name();
+    this._helpWindow.setText(`Choisissez un passif pour ${name}.`);
+    this._choiceWindow.setChoices(this._pickedChoices);
+    this._choiceWindow.activate();
+    this._choiceWindow.select(0);
+  };
+
+  Scene_StateChoice.prototype.choiceWindowRect = function() {
+    const ww = Graphics.boxWidth - 40;
+    const wh = Math.max(320, this.mainAreaHeight() - 8);
+    const wx = (Graphics.boxWidth - ww) / 2;
+    const wy = this.mainAreaTop() + 8;
+    return new Rectangle(wx, wy, ww, wh);
+  };
+
+  Scene_StateChoice.prototype.createChoiceWindow = function() {
+    const rect = this.choiceWindowRect();
+    this._choiceWindow = new Window_StateChoiceCards(rect);
+    this._choiceWindow.setHandler("ok", this.onChoiceOk.bind(this));
+    this._choiceWindow.setHandler("cancel", this.onChoiceCancel.bind(this));
+    this.addWindow(this._choiceWindow);
+  };
+
+  Scene_StateChoice.prototype.onChoiceOk = function() {
+    const item = this._choiceWindow.item();
+    const actor = this._targetActor;
+    const index = this._choiceWindow.index();
+    if (!item || !actor) {
+      this.onChoiceCancel();
+      return;
+    }
+    actor.addState(item.stateId);
+    rememberChosenStateForActor(actor, item.stateId);
+    actor.refresh();
+    if (RESULT_VAR_ID > 0) {
+      $gameVariables.setValue(RESULT_VAR_ID, index);
+    }
+    SoundManager.playOk();
+    this.popScene();
+  };
+
+  Scene_StateChoice.prototype.onChoiceCancel = function() {
+    SoundManager.playCancel();
+    if (RESULT_VAR_ID > 0) {
+      $gameVariables.setValue(RESULT_VAR_ID, -1);
+    }
+    this.popScene();
+  };
 
   PluginManager.registerCommand(PLUGIN_NAME, "openStatChoice", function(args) {
     openStatChoiceScene(this, {
@@ -752,13 +1361,33 @@
     resetAllGrowthBonuses();
   });
 
+  PluginManager.registerCommand(PLUGIN_NAME, "resetChosenStates", function() {
+    resetPersistentChosenStates();
+  });
+
+  PluginManager.registerCommand(PLUGIN_NAME, "openStateChoice", function(args) {
+    openStateChoiceScene(this, {
+      actorTargetMode: args.actorTargetMode,
+      actorVariableId: args.actorVariableId,
+      stateIds: args.stateIds
+    });
+  });
+
   window.ActorStatGrowthChoice = {
     open: openStatChoiceScene,
+    openStateChoice: openStateChoiceScene,
     addStatGrowth,
     addXparamGrowth,
     addLifeStealGrowth,
     applyGrowthChoice,
     resetAllGrowthBonuses,
+    resetPersistentChosenStates,
+    rememberChosenStateForActor,
+    applyPersistentChosenStatesToActor,
+    reapplyPersistentChosenStatesOnSrpgStart,
+    lineageParamBonus,
+    lineageXparamBonus,
+    lineageLifeStealRate,
     getEvolutionRootId,
     ensureLineageStore,
     parseChoicePoolJson,

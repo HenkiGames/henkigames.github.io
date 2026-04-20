@@ -72,16 +72,22 @@
     }
   };
 
-  // Empêche l’utilisation si cooldown actif
-const _Game_BattlerBase_canUse = Game_BattlerBase.prototype.canUse;
-Game_BattlerBase.prototype.canUse = function(item) {
-  if (DataManager.isSkill(item)) {
-    if (this._skillCooldowns && this._skillCooldowns[item.id] > 0) {
-      return false;
+  // Empêche l’utilisation si cooldown actif (sauf riposte SRPG : timing défenseur = 1)
+  const _Game_BattlerBase_canUse = Game_BattlerBase.prototype.canUse;
+  Game_BattlerBase.prototype.canUse = function(item) {
+    if (DataManager.isSkill(item)) {
+      if (this._skillCooldowns && this._skillCooldowns[item.id] > 0) {
+        const riposteSrpg =
+          $gameSystem &&
+          $gameSystem.isSRPGMode &&
+          $gameSystem.isSRPGMode() &&
+          typeof this.srpgActionTiming === "function" &&
+          this.srpgActionTiming() === 1;
+        if (!riposteSrpg) return false;
+      }
     }
-  }
-  return _Game_BattlerBase_canUse.call(this, item);
-};
+    return _Game_BattlerBase_canUse.call(this, item);
+  };
 
   // Extrait le cooldown depuis la note de la compétence
   Game_BattlerBase.prototype.getSkillCooldownTurns = function(skill) {
