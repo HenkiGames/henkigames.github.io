@@ -70,5 +70,6 @@ var $plugins =
 {"name":"SkillRecoilByRealDamage","status":true,"description":"[v1.0] Recoil sur le lanceur base sur les degats reels infliges via note-tag.","parameters":{"allowDeathByRecoil":"false"}},
 {"name":"Cbn_SRPG_HelpWindowSize","status":true,"description":"[v1.0] SRPG: agrandit la fenetre d'aide (description skills/items) en combat.","parameters":{"srpgHelpLines":"4"}},
 {"name":"Cbn_AoEReactionStateOverride","status":true,"description":"[v1.0] SRPG: autorise la reaction AoE (mode false) si la cible porte un etat avec <srpgReactionSkill:X>.","parameters":{}},
-{"name":"SkillLifeStealByRealDamage","status":true,"description":"[v1.0] Vol de vie sur le lanceur base sur les degats reels infliges via note-tag.","parameters":{"enableInSRPG":"true"}}
+{"name":"SkillLifeStealByRealDamage","status":true,"description":"[v1.0] Vol de vie sur le lanceur base sur les degats reels infliges via note-tag.","parameters":{"enableInSRPG":"true"}},
+{"name":"Cbn_BattleExchangeTeamEffects","status":false,"description":"Extension de BattleExchange: declenche une competence SRPG lors d'un echange d'acteur (equipe cible uniquement).","parameters":{"targetTeamId":"5","actorSkillMetaKey":"battleExchangeSkillId"}}
 ];
