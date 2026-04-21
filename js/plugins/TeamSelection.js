@@ -59,6 +59,26 @@
  * @text Ouvrir la selection d'equipe
  * @desc Ouvre une scene visuelle de choix d'equipe (nom, image, description, acteurs).
  *
+ * @command ActivateBronzeStarSwitchForSelectedTeam
+ * @text Activer switch etoile bronze (equipe)
+ * @desc Active l'interrupteur etoile bronze configure pour l'equipe selectionnee.
+ *
+ * @command ActivateSilverStarSwitchForSelectedTeam
+ * @text Activer switch etoile argent (equipe)
+ * @desc Active l'interrupteur etoile argent configure pour l'equipe selectionnee.
+ *
+ * @command ActivateGoldStarSwitchForSelectedTeam
+ * @text Activer switch etoile or (equipe)
+ * @desc Active l'interrupteur etoile or configure pour l'equipe selectionnee.
+ *
+ * @command ActivateDiamondStarSwitchForSelectedTeam
+ * @text Activer switch etoile diamant 1 (equipe)
+ * @desc Active l'interrupteur etoile diamant (1) configure pour l'equipe selectionnee.
+ *
+ * @command ActivateDiamondStar2SwitchForSelectedTeam
+ * @text Activer switch etoile diamant 2 (equipe)
+ * @desc Active l'interrupteur etoile diamant (2) configure pour l'equipe selectionnee.
+ *
  * @help
  * Ce plugin expose une API globale:
  *   TeamSelection.getCurrentActorIds() -> number[]
@@ -472,6 +492,48 @@
     const nextValue = Math.max(0, Math.min(MAX_TEAM_STAR_COUNT, Math.floor(currentValue) + 1));
     $gameVariables.setValue(progressVariableId, nextValue);
     return true;
+  }
+
+  function getTeamStarSwitchIdByIndex(team, starIndex) {
+    if (!team) return 0;
+    switch (Number(starIndex)) {
+    case 1: return Number(team.bronzeStarSwitchId || 0);
+    case 2: return Number(team.silverStarSwitchId || 0);
+    case 3: return Number(team.goldStarSwitchId || 0);
+    case 4: return Number(team.diamondStarSwitchId || 0);
+    case 5: return Number(team.diamondStar2SwitchId || 0);
+    default: return 0;
+    }
+  }
+
+  function activateTeamStarSwitchFromSelectedVariable(starIndex) {
+    const team = resolveTeamFromSelectedVariable();
+    if (!team) return false;
+    if (!$gameSwitches) return false;
+    const switchId = getTeamStarSwitchIdByIndex(team, starIndex);
+    if (switchId <= 0) return false;
+    $gameSwitches.setValue(switchId, true);
+    return true;
+  }
+
+  function activateBronzeStarSwitchFromSelectedVariable() {
+    return activateTeamStarSwitchFromSelectedVariable(1);
+  }
+
+  function activateSilverStarSwitchFromSelectedVariable() {
+    return activateTeamStarSwitchFromSelectedVariable(2);
+  }
+
+  function activateGoldStarSwitchFromSelectedVariable() {
+    return activateTeamStarSwitchFromSelectedVariable(3);
+  }
+
+  function activateDiamondStarSwitchFromSelectedVariable() {
+    return activateTeamStarSwitchFromSelectedVariable(4);
+  }
+
+  function activateDiamondStar2SwitchFromSelectedVariable() {
+    return activateTeamStarSwitchFromSelectedVariable(5);
   }
 
   function isActorUnlockActive(actorUnlock) {
@@ -965,6 +1027,26 @@
     SceneManager.push(Scene_TeamSelection);
   });
 
+  PluginManager.registerCommand(pluginName, "ActivateBronzeStarSwitchForSelectedTeam", () => {
+    activateBronzeStarSwitchFromSelectedVariable();
+  });
+
+  PluginManager.registerCommand(pluginName, "ActivateSilverStarSwitchForSelectedTeam", () => {
+    activateSilverStarSwitchFromSelectedVariable();
+  });
+
+  PluginManager.registerCommand(pluginName, "ActivateGoldStarSwitchForSelectedTeam", () => {
+    activateGoldStarSwitchFromSelectedVariable();
+  });
+
+  PluginManager.registerCommand(pluginName, "ActivateDiamondStarSwitchForSelectedTeam", () => {
+    activateDiamondStarSwitchFromSelectedVariable();
+  });
+
+  PluginManager.registerCommand(pluginName, "ActivateDiamondStar2SwitchForSelectedTeam", () => {
+    activateDiamondStar2SwitchFromSelectedVariable();
+  });
+
   window.TeamSelection = {
     getTeams: () => teams.map(team => ({ id: team.id, name: team.name, actorIds: getUnlockedActorIdsForTeam(team) })),
     getCurrentTeamName,
@@ -972,6 +1054,11 @@
     getCurrentTeamIdAsNumber,
     getCurrentActorIds,
     incrementTeamStarProgressFromSelectedVariable,
+    activateBronzeStarSwitchFromSelectedVariable,
+    activateSilverStarSwitchFromSelectedVariable,
+    activateGoldStarSwitchFromSelectedVariable,
+    activateDiamondStarSwitchFromSelectedVariable,
+    activateDiamondStar2SwitchFromSelectedVariable,
     isTeamUnlocked: teamId => isTeamUnlocked(findTeamById(teamId)),
     setSelectedTeam,
     selectTeamByIndex
