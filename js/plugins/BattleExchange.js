@@ -66,6 +66,8 @@
     const EXCHANGE_SE = { name: "Magic3", volume: 90, pitch: 100, pan: 0 };
     const EXCHANGE_SE_DELAY_MS = 300;
     const EXCHANGE_SE_META_KEY = "exchangeSe";
+    const RECALL_SYMBOL = "recall";
+    const RECALL_TARGET_TEAM_ID = 5;
     const SRPG_TURN_VAR_ID = Number((PluginManager.parameters("SRPG_core_MZ") || {}).turnVarID || 3);
 
     function lastActionSubjectActor() {
@@ -141,6 +143,67 @@
         return null;
     }
 
+    function parsePositiveInt(value) {
+        const n = Number(value);
+        return Number.isInteger(n) && n > 0 ? n : 0;
+    }
+
+    function extractTrailingInteger(value) {
+        if (value === undefined || value === null) return 0;
+        const text = String(value).trim();
+        if (!text) return 0;
+        const match = text.match(/(\d+)$/);
+        return match ? parsePositiveInt(match[1]) : 0;
+    }
+
+    function currentTeamIdNumber() {
+        if (window.TeamSelection) {
+            if (typeof window.TeamSelection.getCurrentTeamIdAsNumber === "function") {
+                const fromApi = parsePositiveInt(window.TeamSelection.getCurrentTeamIdAsNumber());
+                if (fromApi > 0) return fromApi;
+            }
+            if (typeof window.TeamSelection.getCurrentTeamId === "function") {
+                const fromStringApi = extractTrailingInteger(window.TeamSelection.getCurrentTeamId());
+                if (fromStringApi > 0) return fromStringApi;
+            }
+        }
+        const teamSelectionParams = PluginManager.parameters("TeamSelection") || {};
+        const varId = parsePositiveInt(teamSelectionParams.selectedTeamVariableId || 114);
+        if (varId > 0 && $gameVariables) {
+            return extractTrailingInteger($gameVariables.value(varId));
+        }
+        return 0;
+    }
+
+    function isRecallTeamActive() {
+        return currentTeamIdNumber() === RECALL_TARGET_TEAM_ID;
+    }
+
+    function aliveDeployedActors() {
+        if (!$gameMap || !$gameMap.events || !$gameSystem || !$gameSystem.EventToUnit) return [];
+        const out = [];
+        const events = $gameMap.events();
+        for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
+            if (!ev || ev.isErased() || ev.isType() !== "actor") continue;
+            const pair = $gameSystem.EventToUnit(ev.eventId());
+            const battler = pair && pair[1];
+            if (!battler || !battler.isActor || !battler.isActor()) continue;
+            if (!battler.isAlive || !battler.isAlive()) continue;
+            out.push({ event: ev, actor: battler });
+        }
+        return out;
+    }
+
+    function canUseRecallCommand() {
+        if (!$gameSystem || !$gameSystem.isSRPGMode || !$gameSystem.isSRPGMode()) return false;
+        if (!$gameSystem.isBattlePhase || $gameSystem.isBattlePhase() !== "actor_phase") return false;
+        if (!$gameSystem.isSubBattlePhase || $gameSystem.isSubBattlePhase() !== "actor_command_window") return false;
+        if (!isRecallTeamActive()) return false;
+        if (isRecallUsedThisTurn()) return false;
+        return aliveDeployedActors().length > 1;
+    }
+
     function exchangeTurnCount() {
         if ($gameVariables && SRPG_TURN_VAR_ID > 0) {
             const turn = Number($gameVariables.value(SRPG_TURN_VAR_ID) || 0);
@@ -157,7 +220,7 @@
         const turn = exchangeTurnCount();
         const data = $gameSystem._cbnExchangeUsage;
         if (!data || data.turn !== turn) {
-            $gameSystem._cbnExchangeUsage = { turn, menuUsed: false, eventUsed: false };
+            $gameSystem._cbnExchangeUsage = { turn, menuUsed: false, eventUsed: false, recallUsed: false };
             return;
         }
         // Ancienne sauvegarde { turn, used: true } → les deux voies considérées comme déjà utilisées ce tour
@@ -165,6 +228,9 @@
             data.menuUsed = true;
             data.eventUsed = true;
             delete data.used;
+        }
+        if (data.recallUsed === undefined) {
+            data.recallUsed = false;
         }
     }
 
@@ -194,6 +260,19 @@
         $gameSystem._cbnExchangeUsage.eventUsed = true;
     }
 
+    function isRecallUsedThisTurn() {
+        if (!$gameSystem) return false;
+        syncExchangeUsageWithCurrentTurn();
+        const data = $gameSystem._cbnExchangeUsage;
+        return data.turn === exchangeTurnCount() && data.recallUsed === true;
+    }
+
+    function markRecallUsedThisTurn() {
+        if (!$gameSystem) return;
+        syncExchangeUsageWithCurrentTurn();
+        $gameSystem._cbnExchangeUsage.recallUsed = true;
+    }
+
     function markFirstPlayerExchangeSwitch() {
         if (!$gameSwitches) return;
         if (FIRST_EXCHANGE_SWITCH_ID <= 0) return;
@@ -215,7 +294,8 @@
         $gameSystem._cbnExchangeUsage = {
             turn: exchangeTurnCount(),
             menuUsed: false,
-            eventUsed: false
+            eventUsed: false,
+            recallUsed: false
         };
     }
 
@@ -261,9 +341,27 @@
         };
     }
 
-    function playExchangeArrivalFx(event, actor) {
+    function playExchangeArrivalFx(event, actor, animationYOffset = 0) {
+        let restoreScreenY = null;
+        if (event && animationYOffset !== 0 && typeof event.screenY === "function") {
+            const originalScreenY = event.screenY;
+            const patchedScreenY = function() {
+                return originalScreenY.call(this) + animationYOffset;
+            };
+            event.screenY = patchedScreenY;
+            restoreScreenY = () => {
+                if (event.screenY === patchedScreenY) {
+                    event.screenY = originalScreenY;
+                }
+            };
+        }
         if (EXCHANGE_ANIMATION_ID > 0 && $gameTemp && $gameTemp.requestAnimation) {
             $gameTemp.requestAnimation([event], EXCHANGE_ANIMATION_ID);
+            if (restoreScreenY) {
+                setTimeout(() => {
+                    restoreScreenY();
+                }, 450);
+            }
         }
         if (AudioManager && AudioManager.playSe) {
             const seData = resolveExchangeSeForActor(actor);
@@ -445,6 +543,17 @@
         if (waitIndex < 0 || exchangeIndex < waitIndex) return;
         const exchangeCommand = list.splice(exchangeIndex, 1)[0];
         list.splice(waitIndex, 0, exchangeCommand);
+    }
+
+    function sortRecallBeforeWait(commandWindow) {
+        if (!commandWindow || !commandWindow._list || !Array.isArray(commandWindow._list)) return;
+        const list = commandWindow._list;
+        const recallIndex = list.findIndex(cmd => cmd && cmd.symbol === RECALL_SYMBOL);
+        if (recallIndex < 0) return;
+        const waitIndex = list.findIndex(cmd => cmd && cmd.symbol === "wait");
+        if (waitIndex < 0 || recallIndex < waitIndex) return;
+        const recallCommand = list.splice(recallIndex, 1)[0];
+        list.splice(waitIndex, 0, recallCommand);
     }
 
     function resolveSourceActorForPlugin(actorIdArg) {
@@ -642,7 +751,18 @@
                         }
                     }
                 }
+                if (!symbols.includes(RECALL_SYMBOL)) {
+                    this.addCommand("Rappel", RECALL_SYMBOL, canUseRecallCommand());
+                } else {
+                    for (const cmd of this._list) {
+                        if (cmd && cmd.symbol === RECALL_SYMBOL) {
+                            cmd.enabled = canUseRecallCommand();
+                            break;
+                        }
+                    }
+                }
                 sortExchangeBeforeWait(this);
+                sortRecallBeforeWait(this);
             }
         } catch (e) {
             // ignore
@@ -807,12 +927,39 @@
                         }
                     }
                 }
+                if (!symbols.includes(RECALL_SYMBOL)) {
+                    this.addCommand("Rappel", RECALL_SYMBOL, canUseRecallCommand());
+                } else {
+                    for (const cmd of this._list) {
+                        if (cmd && cmd.symbol === RECALL_SYMBOL) {
+                            cmd.enabled = canUseRecallCommand();
+                            break;
+                        }
+                    }
+                }
                 sortExchangeBeforeWait(this);
+                sortRecallBeforeWait(this);
                 if (this.refresh) this.refresh();
             }
         } catch (e) {
             // ignore
         }
+    };
+
+    // Garde-fou SRPG: certains flux peuvent ouvrir la fenêtre de commande alors que
+    // l'activeEvent est momentanément nul (ex: juste après un rappel/retrait).
+    // On évite le crash de SRPG_core.updatePlacement et on place la fenêtre en fallback.
+    const _Window_ActorCommand_updatePlacement_BX = Window_ActorCommand.prototype.updatePlacement;
+    Window_ActorCommand.prototype.updatePlacement = function() {
+        if ($gameSystem && $gameSystem.isSRPGMode && $gameSystem.isSRPGMode()) {
+            const activeEvent = $gameTemp && $gameTemp.activeEvent ? $gameTemp.activeEvent() : null;
+            if (!activeEvent) {
+                this.x = Math.floor((Graphics.boxWidth - this.width) / 2);
+                this.y = Math.floor(Graphics.boxHeight - this.height);
+                return;
+            }
+        }
+        _Window_ActorCommand_updatePlacement_BX.call(this);
     };
 
     // Fallback: si un autre plugin écrase les handlers, on force l'appel ici.
@@ -849,6 +996,28 @@
                 this.playOkSound();
                 this.updateInputData();
                 sceneNow._cbnBattleExchangeCommand();
+                return;
+            }
+        }
+        if (this.currentSymbol() === RECALL_SYMBOL) {
+            const canHandle =
+                $gameSystem && $gameSystem.isSRPGMode && $gameSystem.isSRPGMode() &&
+                $gameSystem.isBattlePhase && $gameSystem.isBattlePhase() === "actor_phase" &&
+                $gameSystem.isSubBattlePhase && $gameSystem.isSubBattlePhase() === "actor_command_window";
+            if (!canHandle) {
+                _Window_ActorCommand_processOk.call(this);
+                return;
+            }
+            if (!this.isCurrentItemEnabled()) {
+                this.playBuzzerSound();
+                this.updateInputData();
+                return;
+            }
+            const sourceActor = this._actor || resolveCommandActor(this);
+            if (sceneNow instanceof Scene_Map && typeof sceneNow._cbnUseRecallCommand === "function") {
+                this.playOkSound();
+                this.updateInputData();
+                sceneNow._cbnUseRecallCommand(sourceActor || null);
                 return;
             }
         }
@@ -889,6 +1058,30 @@
                 this.playOkSound();
                 this.updateInputData();
                 sceneNow._cbnBattleExchangeCommand();
+                return;
+            }
+        }
+        if (this.currentSymbol() === RECALL_SYMBOL) {
+            const canHandle =
+                $gameSystem && $gameSystem.isSRPGMode && $gameSystem.isSRPGMode() &&
+                $gameSystem.isBattlePhase && $gameSystem.isBattlePhase() === "actor_phase" &&
+                $gameSystem.isSubBattlePhase && $gameSystem.isSubBattlePhase() === "actor_command_window";
+            if (!canHandle) {
+                _Window_ActorCommand_callOkHandler.call(this);
+                return;
+            }
+
+            if (!this.isCurrentItemEnabled()) {
+                this.playBuzzerSound();
+                this.updateInputData();
+                return;
+            }
+
+            const sourceActor = this._actor || resolveCommandActor(this);
+            if (sceneNow instanceof Scene_Map && typeof sceneNow._cbnUseRecallCommand === "function") {
+                this.playOkSound();
+                this.updateInputData();
+                sceneNow._cbnUseRecallCommand(sourceActor || null);
                 return;
             }
         }
@@ -962,6 +1155,87 @@
         this._exchangeWindow.setHandler("ok", this._cbnMapOnExchangeOk.bind(this));
         this._exchangeWindow.setHandler("cancel", this._cbnMapOnExchangeCancel.bind(this));
         this.addWindow(this._exchangeWindow);
+    };
+
+    Scene_Map.prototype._cbnUseRecallCommand = function(sourceActor) {
+        if (!canUseRecallCommand()) {
+            SoundManager.playBuzzer();
+            return false;
+        }
+        const selected = sourceActor && sourceActor.actorId ? sourceActor : resolveCommandActor(mapActorCommandWindow(this));
+        if (!selected || !selected.actorId || !$gameSystem || !$gameSystem.ActorToEvent) {
+            SoundManager.playBuzzer();
+            return false;
+        }
+        const deployed = aliveDeployedActors();
+        if (deployed.length <= 1) {
+            SoundManager.playBuzzer();
+            return false;
+        }
+        const eventId = Number($gameSystem.ActorToEvent(selected.actorId()) || 0);
+        const event = eventId > 0 && $gameMap ? $gameMap.event(eventId) : null;
+        if (!event || event.isErased()) {
+            SoundManager.playBuzzer();
+            return false;
+        }
+        if ($gameTemp) {
+            if ($gameTemp.clearMoveTable) $gameTemp.clearMoveTable();
+            if ($gameTemp.clearAreaTargets) $gameTemp.clearAreaTargets();
+            if ($gameTemp.setResetMoveList) $gameTemp.setResetMoveList(true);
+        }
+        playExchangeArrivalFx(event, selected, -10);
+
+        const existActorVarId = srpgExistActorVarId();
+        if (existActorVarId > 0 && $gameVariables) {
+            const oldValue = Number($gameVariables.value(existActorVarId) || 0);
+            $gameVariables.setValue(existActorVarId, Math.max(0, oldValue - 1));
+        }
+
+        if ($gameSystem.removeSrpgAllActors) {
+            $gameSystem.removeSrpgAllActors(event.eventId());
+        }
+        $gameSystem.setEventToUnit(event.eventId(), "null", null);
+        event.setType("");
+        event.erase();
+        if ($gameParty.pushRemainingActorList) {
+            $gameParty.pushRemainingActorList(selected.actorId());
+        }
+        if ($gameParty.initRemainingActorList) {
+            $gameParty.initRemainingActorList();
+        }
+        if (this._spriteset && this._spriteset._characterSprites) {
+            this._spriteset._characterSprites.forEach(sprite => {
+                if (sprite && sprite._character instanceof Game_Event && sprite._character.eventId() === event.eventId()) {
+                    sprite.removeChild(sprite._turnEndSprite);
+                    sprite._turnEndSprite = null;
+                }
+            });
+        }
+        markRecallUsedThisTurn();
+
+        SoundManager.playOk();
+        if ($gameSystem && $gameSystem.setSubBattlePhase) {
+            $gameSystem.setSubBattlePhase("normal");
+        }
+        if ($gameSystem) {
+            if ($gameSystem.clearSrpgActorCommandWindowNeedRefresh) {
+                $gameSystem.clearSrpgActorCommandWindowNeedRefresh();
+            }
+            if ($gameSystem.clearSrpgActorCommandStatusWindowNeedRefresh) {
+                $gameSystem.clearSrpgActorCommandStatusWindowNeedRefresh();
+            }
+        }
+        if ($gameTemp) {
+            if ($gameTemp.setResetMoveList) $gameTemp.setResetMoveList(true);
+            if ($gameTemp.clearTargetEvent) $gameTemp.clearTargetEvent();
+            if ($gameTemp.clearActiveEvent) $gameTemp.clearActiveEvent();
+        }
+        const commandWindow = mapActorCommandWindow(this);
+        if (commandWindow) {
+            if (commandWindow.deactivate) commandWindow.deactivate();
+            if (commandWindow.close) commandWindow.close();
+        }
+        return true;
     };
 
     Scene_Map.prototype._cbnMapBattleExchangeCommand = function(options) {
