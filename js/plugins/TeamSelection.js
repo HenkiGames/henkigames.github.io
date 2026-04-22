@@ -98,7 +98,7 @@
  * - actorUnlocks: acteurs supplementaires debloques via interrupteurs.
  * - lockedImage: image d'attente pour equipe verrouillee.
  * - lockedDescription: description affichee tant que l'equipe est verrouillee.
- * - Etoiles: progression visuelle bronze/argent/or + 2 diamants par equipe via variable ou interrupteurs.
+ * - Etoiles: progression visuelle bronze/argent/or + 2 diamants par equipe via interrupteurs.
  */
 
 /*~struct~TeamConfig:
@@ -168,31 +168,31 @@
  * @text Interrupteur etoile bronze
  * @type switch
  * @default 0
- * @desc Utilise seulement si la variable progression vaut 0.
+ * @desc Etoile bronze affichee si cet interrupteur est ON.
  *
  * @param silverStarSwitchId
  * @text Interrupteur etoile argent
  * @type switch
  * @default 0
- * @desc Utilise seulement si la variable progression vaut 0.
+ * @desc Etoile argent affichee si cet interrupteur est ON.
  *
  * @param goldStarSwitchId
  * @text Interrupteur etoile or
  * @type switch
  * @default 0
- * @desc Utilise seulement si la variable progression vaut 0.
+ * @desc Etoile or affichee si cet interrupteur est ON.
  *
  * @param diamondStarSwitchId
  * @text Interrupteur etoile diamant (1)
  * @type switch
  * @default 0
- * @desc Utilise seulement si la variable progression vaut 0.
+ * @desc Diamant (1) affiche si cet interrupteur est ON.
  *
  * @param diamondStar2SwitchId
  * @text Interrupteur etoile diamant (2)
  * @type switch
  * @default 0
- * @desc Utilise seulement si la variable progression vaut 0.
+ * @desc Diamant (2) affiche si cet interrupteur est ON.
  */
 
 /*~struct~ActorUnlockConfig:
@@ -388,12 +388,6 @@
 
   function getTeamStarCount(team) {
     if (!team || !isTeamUnlocked(team)) return 0;
-
-    if (team.starProgressVariableId > 0 && $gameVariables) {
-      const rawValue = Number($gameVariables.value(team.starProgressVariableId) || 0);
-      const clamped = Math.max(0, Math.min(MAX_TEAM_STAR_COUNT, Math.floor(rawValue)));
-      return clamped;
-    }
 
     if (!$gameSwitches) return 0;
     let count = 0;
