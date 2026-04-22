@@ -16,6 +16,14 @@
  * @default battleExchangeSkillId
  * @desc Cle meta sur l'acteur. Exemple: <battleExchangeSkillId:123>
  *
+ * @param ignoreCanUseCheck
+ * @text Ignorer verification canUse
+ * @type boolean
+ * @on Oui
+ * @off Non
+ * @default true
+ * @desc Si Oui, l'effet d'entree est applique meme si actor.canUse(skill) est false.
+ *
  * @help
  * Place ce plugin SOUS BattleExchange.
  *
@@ -32,6 +40,19 @@
  * Cles meta alternatives supportees automatiquement:
  *   <BattleExchangeSkillId:15>
  *   <exchangeSkillId:15>
+ *
+ * Note-tag competence optionnel (sur la competence declenchee a l'echange):
+ *   <teamCooldownReduce:1>
+ * Alternative acceptees:
+ *   <reduceTeamCooldown:1>
+ *   <reduceTeamCooldowns:1>
+ *   <allyCooldownReduce:1>
+ * Effet: reduit les cooldowns de tous les allies vivants du lanceur de X.
+ *
+ * Portee optionnelle de la reduction:
+ *   <teamCooldownScope:all>       -> tous les allies (acteurs en jeu + reserve) [defaut]
+ *   <teamCooldownScope:deployed>  -> seulement les allies actuellement en jeu
+ *   <teamCooldownScope:reserve>   -> seulement les allies en reserve
  */
 (() => {
     "use strict";
@@ -40,8 +61,21 @@
     const params = PluginManager.parameters(PLUGIN_NAME);
     const TARGET_TEAM_ID = parsePositiveInt(params.targetTeamId || 5);
     const META_KEY = String(params.actorSkillMetaKey || "battleExchangeSkillId").trim();
+    const IGNORE_CAN_USE_CHECK = String(params.ignoreCanUseCheck || "true") !== "false";
     const LOG_PREFIX = `[${PLUGIN_NAME}]`;
     const SRPG_EXIST_ENEMY_VAR_ID = Number((PluginManager.parameters("SRPG_core_MZ") || {}).existEnemyVarID || 2);
+    const TEAM_COOLDOWN_REDUCE_TAGS = [
+        "teamCooldownReduce",
+        "reduceTeamCooldown",
+        "reduceTeamCooldowns",
+        "allyCooldownReduce"
+    ];
+    const TEAM_COOLDOWN_SCOPE_TAGS = [
+        "teamCooldownScope",
+        "cooldownScope",
+        "exchangeCooldownScope"
+    ];
+    let _lastTriggerSignature = "";
 
     function parsePositiveInt(value) {
         const n = Number(value);
@@ -112,6 +146,18 @@
         return skillId;
     }
 
+    function isSrpgObstacleBattler(battler) {
+        return !!(
+            battler &&
+            battler.isEnemy &&
+            battler.isEnemy() &&
+            battler.enemy &&
+            battler.enemy() &&
+            battler.enemy().meta &&
+            battler.enemy().meta.srpgObstacle
+        );
+    }
+
     function collectAliveSrpgBattlersBySide(wantActors) {
         if (!$gameMap || !$gameMap.events || !$gameSystem || !$gameSystem.EventToUnit) return [];
         const out = [];
@@ -126,6 +172,7 @@
             const isEnemy = battler.isEnemy && battler.isEnemy();
             if (wantActors && !isActor) continue;
             if (!wantActors && !isEnemy) continue;
+            if (isSrpgObstacleBattler(battler)) continue;
             if (battler.isAlive && battler.isAlive()) {
                 out.push({ battler, event: ev });
             }
@@ -166,13 +213,22 @@
         return wantOpponents ? opponents : friends;
     }
 
-    function resolveTargetsByScope(subject, skill) {
+    function resolveTargetsByScope(subject, skill, activeEvent) {
         if (!subject || !skill) return [];
         const scope = Number(skill.scope || 0);
         const subjectIsActor = subject.isActor && subject.isActor();
         const opponents = collectAliveBattlersBySide(subjectIsActor, true);
         const friends = collectAliveBattlersBySide(subjectIsActor, false);
         const srpgAreaType = String((skill.meta && skill.meta.srpgAreaType) || "").trim().toLowerCase();
+        const srpgAreaRange = Number((skill.meta && skill.meta.srpgAreaRange) || 0);
+
+        if (isSrpgMapContext()) {
+            const isUserScope = scope === 11;
+            const isSelfCenteredAoE = (isUserScope || srpgAreaType === "self") && srpgAreaRange > 0;
+            if (isSelfCenteredAoE) {
+                return resolveSelfCenteredAoETargets(subject, skill, activeEvent);
+            }
+        }
 
         // Priorite aux tags SRPG de zone si presents.
         if (srpgAreaType === "allopponent") {
@@ -186,21 +242,75 @@
         }
 
         // Scopes MZ usuels:
-        // 1: 1 ennemi, 2: tous ennemis, 7: utilisateur, 8: 1 allié, 10: tous alliés
+        // 1: 1 ennemi, 2: tous ennemis, 7: 1 allié, 8: tous alliés, 11: utilisateur
         switch (scope) {
         case 1:
             return opponents.length > 0 ? [opponents[0]] : [];
         case 2:
             return opponents;
         case 7:
-            return [subject];
+            return friends.length > 0 ? [friends[0]] : [subject];
         case 8:
-            return [subject];
+            return friends;
         case 10:
             return friends;
+        case 11:
+            return [subject];
         default:
             return [subject];
         }
+    }
+
+    function resolveSelfCenteredAoETargets(subject, skill, activeEvent) {
+        const out = [];
+        const range = Math.max(1, Number((skill && skill.meta && skill.meta.srpgAreaRange) || 0));
+        const minRange = Math.max(0, Number((skill && skill.meta && skill.meta.srpgAreaMinRange) || 0));
+        const shape = String((skill && skill.meta && skill.meta.srpgAreaType) || "circle").trim().toLowerCase() || "circle";
+        const centerEvent = activeEvent || eventForBattler(subject);
+        if (!centerEvent) {
+            console.log(`${LOG_PREFIX} AOE-DEBUG resolveSelfCenteredAoE: centerEvent introuvable.`);
+            return out;
+        }
+        console.log(
+            `${LOG_PREFIX} AOE-DEBUG center=${centerEvent.eventId ? centerEvent.eventId() : "?"}` +
+            ` pos=(${centerEvent.posX()},${centerEvent.posY()}) range=${range} min=${minRange} shape=${shape}`
+        );
+
+        const adjacentCandidates = collectAliveSrpgBattlersBySide(false).concat(collectAliveSrpgBattlersBySide(true));
+        const centerX = Number(centerEvent.posX());
+        const centerY = Number(centerEvent.posY());
+        const dir = centerEvent.direction ? Number(centerEvent.direction()) : 2;
+        for (let i = 0; i < adjacentCandidates.length; i++) {
+            const entry = adjacentCandidates[i];
+            if (!entry || !entry.battler || !entry.event) continue;
+            if (entry.battler === subject) continue;
+            const dxRaw = Number(entry.event.posX()) - centerX;
+            const dyRaw = Number(entry.event.posY()) - centerY;
+            const dx = Math.abs(dxRaw);
+            const dy = Math.abs(dyRaw);
+            const manhattan = dx + dy;
+            const name = entry.battler.name ? entry.battler.name() : "unknown";
+            const side = entry.battler.isActor && entry.battler.isActor() ? "actor" : "enemy";
+            const inRange = $gameMap && $gameMap.inArea
+                ? $gameMap.inArea(dxRaw, dyRaw, range, minRange, shape, dir)
+                : manhattan <= range;
+            console.log(
+                `${LOG_PREFIX} AOE-DEBUG candidat ${side}:${name}` +
+                ` pos=(${entry.event.posX()},${entry.event.posY()}) dx=${dxRaw} dy=${dyRaw} d=${manhattan}` +
+                ` inRange=${inRange}`
+            );
+            if (inRange) out.push(entry.battler);
+        }
+        console.log(`${LOG_PREFIX} AOE-DEBUG total cibles adjacentes=${out.length}.`);
+        return out;
+    }
+
+    function eventForBattler(battler) {
+        if (!battler || !battler.srpgEventId || !$gameMap) return null;
+        const eventId = Number(battler.srpgEventId() || 0);
+        if (eventId <= 0) return null;
+        const ev = $gameMap.event(eventId);
+        return ev && !ev.isErased() ? ev : null;
     }
 
     function applyExchangeSkill(actor, activeEvent) {
@@ -209,13 +319,18 @@
             console.log(`${LOG_PREFIX} competence non appliquee: skillId invalide ou inexistante (${skillId}).`);
             return;
         }
-        if (!actor.canUse || !actor.canUse($dataSkills[skillId])) {
+        const canUse = !!(actor.canUse && actor.canUse($dataSkills[skillId]));
+        if (!canUse && !IGNORE_CAN_USE_CHECK) {
             console.log(`${LOG_PREFIX} competence non applicable (canUse=false): skillId=${skillId}.`);
             return;
         }
+        if (!canUse && IGNORE_CAN_USE_CHECK) {
+            console.log(`${LOG_PREFIX} canUse=false ignore (param actif): skillId=${skillId}.`);
+        }
 
         const skill = $dataSkills[skillId];
-        const targets = resolveTargetsByScope(actor, skill);
+        const cooldownReduced = applyTeamCooldownReductionFromSkill(actor, skill);
+        const targets = resolveTargetsByScope(actor, skill, activeEvent);
         const targetEvents = resolveEventsForTargets(targets);
         const srpgAreaType = String((skill.meta && skill.meta.srpgAreaType) || "").trim();
         const srpgAreaRange = Number((skill.meta && skill.meta.srpgAreaRange) || 0);
@@ -233,44 +348,74 @@
             `${LOG_PREFIX} scope skill=${skill.scope} targets=${targets.length} skillId=${skillId}.`,
             targetDebug
         );
+        if (activeEvent) {
+            console.log(
+                `${LOG_PREFIX} AOE-DEBUG activeEvent id=${activeEvent.eventId ? activeEvent.eventId() : "?"}` +
+                ` pos=(${activeEvent.posX()},${activeEvent.posY()})`
+            );
+        } else {
+            console.log(`${LOG_PREFIX} AOE-DEBUG activeEvent absent.`);
+        }
         console.log(
             `${LOG_PREFIX} srpgAreaType=${srpgAreaType || "(none)"} srpgAreaRange=${srpgAreaRange}.`
         );
         console.log(`${LOG_PREFIX} ennemis detectes=`, opponentsDebug);
         if (targets.length <= 0) {
-            console.log(`${LOG_PREFIX} competence non appliquee: aucune cible resolue.`);
+            if (cooldownReduced) {
+                console.log(`${LOG_PREFIX} aucune cible resolue, mais reduction des cooldowns appliquee.`);
+            } else {
+                console.log(`${LOG_PREFIX} competence non appliquee: aucune cible resolue.`);
+            }
             return;
         }
-        for (let i = 0; i < targets.length; i++) {
-            const target = targets[i];
-            const targetName = target && target.name ? target.name() : `target#${i}`;
-            const hpBefore = target && typeof target.hp === "number" ? target.hp : null;
-            const mpBefore = target && typeof target.mp === "number" ? target.mp : null;
-            const tpBefore = target && typeof target.tp === "number" ? target.tp : null;
-            const action = new Game_Action(actor);
-            action.setSkill(skillId);
-            action.apply(target);
-            if (target && target.result && target.result() && !target.result().used) {
-                forceApplyAction(action, target);
-            }
-            const hpAfter = target && typeof target.hp === "number" ? target.hp : null;
-            const mpAfter = target && typeof target.mp === "number" ? target.mp : null;
-            const tpAfter = target && typeof target.tp === "number" ? target.tp : null;
-            const result = target && target.result ? target.result() : null;
+        withTemporaryAoECenter(actor, skill, activeEvent, () => {
             console.log(
-                `${LOG_PREFIX} cible=${targetName} hp ${hpBefore}=>${hpAfter} mp ${mpBefore}=>${mpAfter} tp ${tpBefore}=>${tpAfter}` +
-                ` | used=${result ? result.used : "?"}` +
-                ` missed=${result ? result.missed : "?"}` +
-                ` evaded=${result ? result.evaded : "?"}` +
-                ` critical=${result ? result.critical : "?"}` +
-                ` hpDamage=${result ? result.hpDamage : "?"}` +
-                ` mpDamage=${result ? result.mpDamage : "?"}` +
-                ` tpDamage=${result ? result.tpDamage : "?"}` +
-                ` addedStates=${result && result.addedStateObjects ? result.addedStateObjects().map(s => s.id).join(",") : ""}`
+                `${LOG_PREFIX} AOE-DEBUG centre temporaire area=(${typeof $gameTemp.areaX === "function" ? $gameTemp.areaX() : "?"},` +
+                `${typeof $gameTemp.areaY === "function" ? $gameTemp.areaY() : "?"})`
             );
-            if (target.startDamagePopup) target.startDamagePopup();
-            if (target.performResultEffects) target.performResultEffects();
-        }
+            for (let i = 0; i < targets.length; i++) {
+                const target = targets[i];
+                const targetName = target && target.name ? target.name() : `target#${i}`;
+                const targetEvent = eventForBattler(target);
+                const hpBefore = target && typeof target.hp === "number" ? target.hp : null;
+                const mpBefore = target && typeof target.mp === "number" ? target.mp : null;
+                const tpBefore = target && typeof target.tp === "number" ? target.tp : null;
+                if (targetEvent) {
+                    console.log(
+                        `${LOG_PREFIX} AOE-DEBUG application sur ${targetName}` +
+                        ` event=${targetEvent.eventId ? targetEvent.eventId() : "?"}` +
+                        ` pos=(${targetEvent.posX()},${targetEvent.posY()})` +
+                        ` distCentre=${Math.abs(targetEvent.posX() - $gameTemp.areaX()) + Math.abs(targetEvent.posY() - $gameTemp.areaY())}`
+                    );
+                } else {
+                    console.log(`${LOG_PREFIX} AOE-DEBUG application sur ${targetName} sans event map.`);
+                }
+                const action = new Game_Action(actor);
+                action.setSkill(skillId);
+                action.apply(target);
+                if (target && target.result && target.result() && !target.result().used) {
+                    console.log(`${LOG_PREFIX} AOE-DEBUG fallback forceApplyAction pour ${targetName}.`);
+                    forceApplyAction(action, target);
+                }
+                const hpAfter = target && typeof target.hp === "number" ? target.hp : null;
+                const mpAfter = target && typeof target.mp === "number" ? target.mp : null;
+                const tpAfter = target && typeof target.tp === "number" ? target.tp : null;
+                const result = target && target.result ? target.result() : null;
+                console.log(
+                    `${LOG_PREFIX} cible=${targetName} hp ${hpBefore}=>${hpAfter} mp ${mpBefore}=>${mpAfter} tp ${tpBefore}=>${tpAfter}` +
+                    ` | used=${result ? result.used : "?"}` +
+                    ` missed=${result ? result.missed : "?"}` +
+                    ` evaded=${result ? result.evaded : "?"}` +
+                    ` critical=${result ? result.critical : "?"}` +
+                    ` hpDamage=${result ? result.hpDamage : "?"}` +
+                    ` mpDamage=${result ? result.mpDamage : "?"}` +
+                    ` tpDamage=${result ? result.tpDamage : "?"}` +
+                    ` addedStates=${result && result.addedStateObjects ? result.addedStateObjects().map(s => s.id).join(",") : ""}`
+                );
+                if (target.startDamagePopup) target.startDamagePopup();
+                if (target.performResultEffects) target.performResultEffects();
+            }
+        });
         const globalAction = new Game_Action(actor);
         globalAction.setSkill(skillId);
         globalAction.applyGlobal();
@@ -291,9 +436,212 @@
 
     }
 
+    function teamCooldownReductionAmountFromSkill(skill) {
+        if (!skill || !skill.meta) return 0;
+        for (let i = 0; i < TEAM_COOLDOWN_REDUCE_TAGS.length; i++) {
+            const key = TEAM_COOLDOWN_REDUCE_TAGS[i];
+            const value = parsePositiveInt(skill.meta[key]);
+            if (value > 0) return value;
+        }
+        return 0;
+    }
+
+    function cooldownScopeFromSkill(skill) {
+        if (!skill || !skill.meta) return "all";
+        for (let i = 0; i < TEAM_COOLDOWN_SCOPE_TAGS.length; i++) {
+            const key = TEAM_COOLDOWN_SCOPE_TAGS[i];
+            const raw = skill.meta[key];
+            if (raw === undefined || raw === null) continue;
+            const text = String(raw).trim().toLowerCase();
+            if (text === "all" || text === "team" || text === "party") return "all";
+            if (text === "deployed" || text === "field" || text === "active" || text === "battle") return "deployed";
+            if (text === "reserve" || text === "bench") return "reserve";
+        }
+        return "all";
+    }
+
+    function deployedActorIdsOnMap() {
+        if (!$gameMap || !$gameMap.events || !$gameSystem || !$gameSystem.EventToUnit) return [];
+        const ids = [];
+        const events = $gameMap.events();
+        for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
+            if (!ev || ev.isErased()) continue;
+            const pair = $gameSystem.EventToUnit(ev.eventId());
+            const battler = pair && pair[1];
+            if (!battler || !battler.isActor || !battler.isActor()) continue;
+            if (!battler.actorId) continue;
+            ids.push(Number(battler.actorId()));
+        }
+        return ids;
+    }
+
+    function reserveActorIdsFromParty(deployedIds) {
+        if (
+            !$gameSystem ||
+            !$gameSystem.isSRPGMode ||
+            !$gameSystem.isSRPGMode() ||
+            !$gameParty ||
+            !$gameParty.getRemainingActorList
+        ) {
+            return [];
+        }
+        if ($gameParty.initRemainingActorList) {
+            $gameParty.initRemainingActorList();
+        }
+        const ids = $gameParty.getRemainingActorList();
+        if (!Array.isArray(ids)) return [];
+        const deployedSet = new Set(deployedIds || []);
+        const out = [];
+        for (let i = 0; i < ids.length; i++) {
+            const id = Number(ids[i] || 0);
+            if (id <= 0) continue;
+            if (deployedSet.has(id)) continue;
+            out.push(id);
+        }
+        return out;
+    }
+
+    function battlersFromActorIds(ids) {
+        if (!$gameActors || !$gameActors.actor || !Array.isArray(ids)) return [];
+        const out = [];
+        for (let i = 0; i < ids.length; i++) {
+            const actor = $gameActors.actor(Number(ids[i] || 0));
+            if (actor) out.push(actor);
+        }
+        return out;
+    }
+
+    function teamMembersForCooldownReduction(subject, scope) {
+        if (!subject) return [];
+        const subjectIsActor = !!(subject.isActor && subject.isActor());
+        if (!subjectIsActor) {
+            return $gameTroop && $gameTroop.members ? $gameTroop.members() : [];
+        }
+
+        const normalizedScope = scope || "all";
+        if (!$gameSystem || !$gameSystem.isSRPGMode || !$gameSystem.isSRPGMode()) {
+            const allMembers = $gameParty && $gameParty.allMembers ? $gameParty.allMembers() : [];
+            if (normalizedScope === "deployed") {
+                return $gameParty && $gameParty.battleMembers ? $gameParty.battleMembers() : allMembers;
+            }
+            if (normalizedScope === "reserve") {
+                const battleMembers = $gameParty && $gameParty.battleMembers ? $gameParty.battleMembers() : [];
+                return allMembers.filter(member => member && !battleMembers.includes(member));
+            }
+            return allMembers;
+        }
+
+        const deployedIds = deployedActorIdsOnMap();
+        if (normalizedScope === "deployed") {
+            return battlersFromActorIds(deployedIds);
+        }
+        if (normalizedScope === "reserve") {
+            return battlersFromActorIds(reserveActorIdsFromParty(deployedIds));
+        }
+        return $gameParty && $gameParty.allMembers ? $gameParty.allMembers() : [];
+    }
+
+    function reduceBattlerCooldownsBy(battler, amount) {
+        if (!battler || amount <= 0) return false;
+        if (!battler._skillCooldowns) return false;
+        const keys = Object.keys(battler._skillCooldowns);
+        if (keys.length <= 0) return false;
+        let changed = false;
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            const current = Number(battler._skillCooldowns[key] || 0);
+            if (current <= 0) continue;
+            const next = Math.max(0, current - amount);
+            if (next <= 0) {
+                delete battler._skillCooldowns[key];
+            } else {
+                battler._skillCooldowns[key] = next;
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    function applyTeamCooldownReductionFromSkill(subject, skill) {
+        const amount = teamCooldownReductionAmountFromSkill(skill);
+        if (amount <= 0) return false;
+        const scope = cooldownScopeFromSkill(skill);
+        const members = teamMembersForCooldownReduction(subject, scope);
+        if (!Array.isArray(members) || members.length <= 0) return false;
+        let affectedMembers = 0;
+        for (let i = 0; i < members.length; i++) {
+            const battler = members[i];
+            if (!battler || !battler.isAlive || !battler.isAlive()) continue;
+            if (reduceBattlerCooldownsBy(battler, amount)) affectedMembers++;
+        }
+        console.log(
+            `${LOG_PREFIX} reduction cooldown equipe: amount=${amount}, scope=${scope}, membresAffectes=${affectedMembers}.`
+        );
+        return true;
+    }
+
+    function withTemporaryAoECenter(subject, skill, activeEvent, callback) {
+        if (!$gameTemp || typeof callback !== "function") {
+            if (typeof callback === "function") callback();
+            return;
+        }
+        const centerEvent = activeEvent || eventForBattler(subject);
+        if (!centerEvent) {
+            console.log(`${LOG_PREFIX} AOE-DEBUG withTemporaryAoECenter: aucun centre, execution brute.`);
+            callback();
+            return;
+        }
+        const previousAoE = $gameTemp._activeAoE || null;
+        const areaRange = Number((skill && skill.meta && skill.meta.srpgAreaRange) || 0);
+        const areaType = String((skill && skill.meta && skill.meta.srpgAreaType) || "circle").trim().toLowerCase() || "circle";
+        const areaMin = Number((skill && skill.meta && skill.meta.srpgAreaMinRange) || 0);
+        const facingDir = centerEvent.direction ? Number(centerEvent.direction()) : 2;
+
+        $gameTemp._activeAoE = {
+            x: Number(centerEvent.posX()),
+            y: Number(centerEvent.posY()),
+            size: Math.max(1, areaRange),
+            minSize: Math.max(0, areaMin),
+            shape: areaType,
+            dir: facingDir
+        };
+        console.log(
+            `${LOG_PREFIX} AOE-DEBUG set _activeAoE x=${$gameTemp._activeAoE.x} y=${$gameTemp._activeAoE.y}` +
+            ` size=${$gameTemp._activeAoE.size} shape=${$gameTemp._activeAoE.shape} dir=${$gameTemp._activeAoE.dir}`
+        );
+        try {
+            callback();
+        } finally {
+            $gameTemp._activeAoE = previousAoE;
+            if (previousAoE) {
+                console.log(
+                    `${LOG_PREFIX} AOE-DEBUG restore _activeAoE x=${previousAoE.x} y=${previousAoE.y}` +
+                    ` size=${previousAoE.size} shape=${previousAoE.shape}`
+                );
+            } else {
+                console.log(`${LOG_PREFIX} AOE-DEBUG restore _activeAoE=null.`);
+            }
+        }
+    }
+
+    function triggerExchangeEffectOnce(actor, activeEvent, contextTag) {
+        if (!actor || !actor.actorId) return;
+        const frame = (Graphics && Number.isInteger(Graphics.frameCount)) ? Graphics.frameCount : 0;
+        const signature = `${frame}:${actor.actorId()}`;
+        if (_lastTriggerSignature === signature) {
+            console.log(`${LOG_PREFIX} skip doublon trigger=${signature}.`);
+            return;
+        }
+        _lastTriggerSignature = signature;
+        applyExchangeSkill(actor, activeEvent);
+    }
+
     function forceApplyAction(action, target) {
         if (!action || !target || !target.result) return;
         const result = target.result();
+        const item = action.item ? action.item() : null;
+        const damage = item && item.damage ? item.damage : null;
         result.clear();
         result.used = true;
         result.missed = Math.random() >= action.itemHit(target);
@@ -302,12 +650,26 @@
         result.drain = action.isDrain();
 
         if (result.isHit()) {
-            if (action.item() && action.item().damage && action.item().damage.type > 0) {
+            if (damage && damage.type > 0) {
                 result.critical = Math.random() < action.itemCri(target);
                 const value = action.makeDamageValue(target, result.critical);
                 action.executeDamage(target, value);
+            } else if (damage && typeof action.evalDamageFormula === "function") {
+                // Les skills utilitaires (damage type 0) utilisent souvent la formule
+                // pour des effets de position (ex: push/pull). On force son evaluation.
+                const formulaText = damage.formula || "";
+                const targetSide =
+                    target && target.isActor && target.isActor()
+                        ? "actor"
+                        : (target && target.isEnemy && target.isEnemy() ? "enemy" : "unknown");
+                console.log(
+                    `${LOG_PREFIX} AOE-DEBUG eval formule damageType=0 target=${targetSide}` +
+                    ` formula="${String(formulaText)}"`
+                );
+                const formulaValue = action.evalDamageFormula(target);
+                console.log(`${LOG_PREFIX} AOE-DEBUG resultat formule=${formulaValue}.`);
             }
-            const effects = action.item() && Array.isArray(action.item().effects) ? action.item().effects : [];
+            const effects = item && Array.isArray(item.effects) ? item.effects : [];
             for (let i = 0; i < effects.length; i++) {
                 action.applyItemEffect(target, effects[i]);
             }
@@ -325,6 +687,51 @@
             scene.srpgBattlerDeadAfterBattle();
         }
         cleanupDeadEnemyTargets(deadTargets);
+        syncSrpgExistEnemyCount();
+    }
+
+    function syncSrpgExistEnemyCount() {
+        if (
+            !$gameSystem ||
+            !$gameSystem.isSRPGMode ||
+            !$gameSystem.isSRPGMode() ||
+            !$gameMap ||
+            !$gameMap.events ||
+            !$gameVariables ||
+            SRPG_EXIST_ENEMY_VAR_ID <= 0 ||
+            !$gameSystem.EventToUnit
+        ) {
+            return;
+        }
+        const events = $gameMap.events();
+        let aliveEnemyCount = 0;
+        for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
+            if (!ev || ev.isErased()) continue;
+            const pair = $gameSystem.EventToUnit(ev.eventId());
+            const battler = pair && pair[1];
+            if (!battler || !battler.isEnemy || !battler.isEnemy()) continue;
+            // Compat SRPG_ObstacleGate: les obstacles enemies ne comptent pas
+            // dans existEnemyVarID pour la condition de victoire.
+            if (
+                battler.enemy &&
+                battler.enemy() &&
+                battler.enemy().meta &&
+                battler.enemy().meta.srpgObstacle
+            ) {
+                continue;
+            }
+            if (battler.isAlive && battler.isAlive()) {
+                aliveEnemyCount++;
+            }
+        }
+        const oldValue = Number($gameVariables.value(SRPG_EXIST_ENEMY_VAR_ID) || 0);
+        if (oldValue !== aliveEnemyCount) {
+            $gameVariables.setValue(SRPG_EXIST_ENEMY_VAR_ID, aliveEnemyCount);
+            console.log(
+                `${LOG_PREFIX} resync existEnemyVarID ${SRPG_EXIST_ENEMY_VAR_ID}: ${oldValue}=>${aliveEnemyCount}.`
+            );
+        }
     }
 
     function cleanupDeadEnemyTargets(deadTargets) {
@@ -380,6 +787,16 @@
             this._exchangeWindow && this._exchangeWindow.actor
                 ? this._exchangeWindow.actor(this._exchangeWindow.index())
                 : null;
+        const sourceActor =
+            this._cbnExchangeSourceActor && this._cbnExchangeSourceActor.isActor
+                ? this._cbnExchangeSourceActor
+                : null;
+        const isRealDeathReplacement = !!(
+            wasDeathExchange &&
+            sourceActor &&
+            sourceActor.isDead &&
+            sourceActor.isDead()
+        );
         const activeEvent =
             typeof mapEventForSubjectActor === "function"
                 ? mapEventForSubjectActor(this)
@@ -389,10 +806,10 @@
 
         const currentTeam = currentTeamIdNumber();
         console.log(
-            `${LOG_PREFIX} validation echange: wasDeath=${wasDeathExchange} teamCourante=${currentTeam} teamCible=${TARGET_TEAM_ID} actor=`,
+            `${LOG_PREFIX} validation echange: wasDeath=${wasDeathExchange} realDeath=${isRealDeathReplacement} teamCourante=${currentTeam} teamCible=${TARGET_TEAM_ID} actor=`,
             selectedActor
         );
-        if (wasDeathExchange) {
+        if (isRealDeathReplacement) {
             console.log(`${LOG_PREFIX} stop: echange suite a mort (ignore volontairement).`);
             return;
         }
@@ -404,7 +821,7 @@
             console.log(`${LOG_PREFIX} stop: team non ciblee.`);
             return;
         }
-        applyExchangeSkill(selectedActor, activeEvent);
+        triggerExchangeEffectOnce(selectedActor, activeEvent, "scene_map_on_exchange_ok");
     };
 
     const _Scene_Battle_onExchangeOk = Scene_Battle.prototype.onExchangeOk;
@@ -429,6 +846,37 @@
             console.log(`${LOG_PREFIX} battle stop: team non ciblee.`);
             return;
         }
-        applyExchangeSkill(selectedActor, null);
+        triggerExchangeEffectOnce(selectedActor, null, "scene_battle_on_exchange_ok");
+    };
+
+    // Filet de securite: certains flux "echange reserve (evenement)" peuvent contourner
+    // le hook Scene_Map selon l'ordre de plugins. On se greffe sur le swap effectif.
+    const _Game_Map_changeActor_CbnExchangeFx = Game_Map.prototype.changeActor;
+    Game_Map.prototype.changeActor = function(eventId, actorId) {
+        _Game_Map_changeActor_CbnExchangeFx.call(this, eventId, actorId);
+        const scene = SceneManager._scene;
+        if (!(scene instanceof Scene_Map)) return;
+        const currentTeam = currentTeamIdNumber();
+        if (currentTeam !== TARGET_TEAM_ID) return;
+        const sourceActor =
+            scene._cbnExchangeSourceActor && scene._cbnExchangeSourceActor.isActor
+                ? scene._cbnExchangeSourceActor
+                : null;
+        const isRealDeathReplacement = !!(
+            scene._cbnExchangeOpenFromDeath &&
+            sourceActor &&
+            sourceActor.isDead &&
+            sourceActor.isDead()
+        );
+        if (isRealDeathReplacement) return;
+        // Accepte aussi les swaps faits via evenement commun (ex: skill 235) qui
+        // peuvent contourner le contexte UI de BattleExchange.
+        const swappedActor = $gameActors && $gameActors.actor ? $gameActors.actor(Number(actorId || 0)) : null;
+        if (!swappedActor) return;
+        const inExchangeFlow = !!(scene._exchangeWindow || scene._cbnExchangeOpenFromEvent || scene._cbnExchangeOpenFromDeath);
+        console.log(
+            `${LOG_PREFIX} fallback changeActor hook eventId=${eventId} actorId=${actorId} inExchangeFlow=${inExchangeFlow}.`
+        );
+        triggerExchangeEffectOnce(swappedActor, $gameMap.event(eventId), "game_map_change_actor_fallback");
     };
 })();

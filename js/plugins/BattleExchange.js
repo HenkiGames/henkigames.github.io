@@ -13,6 +13,16 @@
  * @type actor
  * @default 0
  *
+ * @command RandomReserveExchangeFromEvent
+ * @text Échange réserve aléatoire (événement)
+ * @desc Effectue immédiatement un échange avec un remplaçant aléatoire (sans fenêtre).
+ *
+ * @arg actorId
+ * @text ID acteur à remplacer (0 = auto)
+ * @desc 0 = dernier sujet de compétence (MZ), sinon BattleManager / activeEvent SRPG.
+ * @type actor
+ * @default 0
+ *
  * @param deferDeathExchangeToEnemyPhaseEnd
  * @text Echange mort apres phase ennemie
  * @type boolean
@@ -31,6 +41,7 @@
  * Événement commun : commande plugin « Échange réserve (événement) ».
  * Pendant le map battle SRPG, le déroulé de l'événement est suspendu jusqu'au choix.
  * Script optionnel : CbnOpenReserveExchangeFromEvent(actorId)
+ * Script optionnel (aléatoire immédiat) : CbnRandomReserveExchangeFromEvent(actorId)
  *
  * Mort d'un acteur allié après une action (phase after_battle SRPG) : si la réserve
  * n'est pas vide, le menu d'échange s'ouvre avant de retirer l'unité de la carte.
@@ -208,6 +219,36 @@
         };
     }
 
+    function resetReserveActorsTurnState() {
+        if (!$gameSystem || !$gameSystem.isSRPGMode || !$gameSystem.isSRPGMode()) return;
+        if (!$gameParty || !$gameActors) return;
+        if (!$gameParty.initRemainingActorList || !$gameParty.getRemainingActorList) return;
+
+        $gameParty.initRemainingActorList();
+        const ids = $gameParty.getRemainingActorList();
+        if (!Array.isArray(ids) || ids.length === 0) return;
+
+        for (let i = 0; i < ids.length; i++) {
+            const actor = $gameActors.actor(Number(ids[i] || 0));
+            if (!actor || !actor.isAlive || !actor.isAlive()) continue;
+            if (actor.setSrpgTurnEnd) actor.setSrpgTurnEnd(false);
+            if (actor.SRPGActionTimesSet) actor.SRPGActionTimesSet();
+            if (actor.setActionTiming) actor.setActionTiming(-1);
+        }
+    }
+
+    function resetAllPartyActorsTurnStateForBattleStart() {
+        if (!$gameParty || !$gameParty.allMembers) return;
+        const members = $gameParty.allMembers();
+        for (let i = 0; i < members.length; i++) {
+            const actor = members[i];
+            if (!actor) continue;
+            if (actor.setSrpgTurnEnd) actor.setSrpgTurnEnd(false);
+            if (actor.SRPGActionTimesSet) actor.SRPGActionTimesSet();
+            if (actor.setActionTiming) actor.setActionTiming(-1);
+        }
+    }
+
     function resolveExchangeSeForActor(actor) {
         const meta = actor && actor.actor && actor.actor().meta ? actor.actor().meta : null;
         const seName = meta && meta[EXCHANGE_SE_META_KEY] ? String(meta[EXCHANGE_SE_META_KEY]).trim() : "";
@@ -270,6 +311,25 @@
         }
     }
 
+    function resetMapBattleLungeVisualOffset(scene, eventId) {
+        if (!scene || !scene._spriteset || !scene._spriteset._characterSprites) return;
+        const sprites = scene._spriteset._characterSprites;
+        for (const sprite of sprites) {
+            if (!sprite || !sprite._character || !sprite._character.isEvent || !sprite._character.isEvent()) continue;
+            if (!sprite._character.eventId || sprite._character.eventId() !== eventId) continue;
+            // Compat BattlerSkillLunge: annule l'offset "avance" restant apres un swap en cours d'action.
+            if ("_bcaMapOffsetX" in sprite) sprite._bcaMapOffsetX = 0;
+            if ("_bcaMapOffsetY" in sprite) sprite._bcaMapOffsetY = 0;
+            if ("_bcaMapTargetOffsetX" in sprite) sprite._bcaMapTargetOffsetX = 0;
+            if ("_bcaMapTargetOffsetY" in sprite) sprite._bcaMapTargetOffsetY = 0;
+            if ("_bcaMapMoveDuration" in sprite) sprite._bcaMapMoveDuration = 0;
+            if ("_bcaMapBaseX" in sprite) sprite._bcaMapBaseX = 0;
+            if ("_bcaMapBaseY" in sprite) sprite._bcaMapBaseY = 0;
+            if (sprite.updatePosition) sprite.updatePosition();
+            break;
+        }
+    }
+
     function srpgExistActorVarId() {
         return Number((PluginManager.parameters("SRPG_core_MZ") || {}).existActorVarID || 1);
     }
@@ -302,6 +362,25 @@
         const valueId = battler.isActor() ? srpgExistActorVarId() : srpgExistEnemyVarId();
         const oldValue = $gameVariables.value(valueId);
         $gameVariables.setValue(valueId, oldValue - 1);
+    }
+
+    // Filet de securite: certains enchainements (echange + degats secondaires/projectiles)
+    // peuvent laisser des ennemis a 0 HP visibles sur la map si le pipeline standard manque
+    // leur event. On force ici un nettoyage des ennemis morts apres l'action.
+    function cleanupAnyDeadEnemyEventsOnMap() {
+        if (!$gameSystem || !$gameSystem.isSRPGMode || !$gameSystem.isSRPGMode()) return;
+        if (!$gameMap || !$gameMap.events || !$gameSystem.EventToUnit) return;
+        const events = $gameMap.events();
+        for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
+            if (!ev || ev.isErased()) continue;
+            const pair = $gameSystem.EventToUnit(ev.eventId());
+            const battler = pair && pair[1];
+            if (!battler || !battler.isEnemy || !battler.isEnemy()) continue;
+            if (battler.isDead && battler.isDead()) {
+                applySrpgMapDeathErase(ev, battler);
+            }
+        }
     }
 
     // Sortie du mode SRPG : si plus aucun acteur vivant n'existe dans le groupe, on force
@@ -347,22 +426,13 @@
         if (arrivedBattler && arrivedBattler.setMovedStep) {
             arrivedBattler.setMovedStep(0);
         }
-        if (activeEvent && $gameSystem.srpgMakeMoveTableOriginalPos) {
-            $gameSystem.srpgMakeMoveTableOriginalPos(activeEvent);
-        } else if ($gameTemp && $gameTemp.clearMoveTable) {
+        // Ne pas reconstruire les zones de deplacement ici: cela donne l'impression
+        // que l'acteur entrant est deja selectionne et pret a agir.
+        if ($gameTemp && $gameTemp.clearMoveTable) {
             $gameTemp.clearMoveTable();
         }
         if ($gameTemp && $gameTemp.setResetMoveList) {
             $gameTemp.setResetMoveList(true);
-        }
-        if ($gamePlayer && activeEvent) {
-            const px = activeEvent.posX();
-            const py = activeEvent.posY();
-            if (typeof $gamePlayer.slideTo === "function") {
-                $gamePlayer.slideTo(px, py);
-            } else if ($gamePlayer.jump) {
-                $gamePlayer.jump(px - $gamePlayer.x, py - $gamePlayer.y);
-            }
         }
     }
 
@@ -394,6 +464,18 @@
         return null;
     }
 
+    function restoreActiveEventFromSourceActor(scene) {
+        if (!$gameTemp || !$gameTemp.setActiveEvent) return;
+        const actor = scene && scene._cbnExchangeSourceActor;
+        if (!actor || !actor.actorId || !$gameSystem || !$gameSystem.ActorToEvent) return;
+        const eid = Number($gameSystem.ActorToEvent(actor.actorId()) || 0);
+        if (eid <= 0 || !$gameMap) return;
+        const ev = $gameMap.event(eid);
+        if (ev && !ev.isErased()) {
+            $gameTemp.setActiveEvent(ev);
+        }
+    }
+
     function clearExchangeEventWaitForScene(scene) {
         if (!scene) return;
         scene._cbnExchangeEventWaitActive = false;
@@ -422,6 +504,15 @@
         };
     }
 
+    // Nouveau combat SRPG: purge tout etat "a deja joue" residuel entre deux combats.
+    if (Game_System.prototype.startSRPG) {
+        const _CBN_Game_System_startSRPG = Game_System.prototype.startSRPG;
+        Game_System.prototype.startSRPG = function() {
+            _CBN_Game_System_startSRPG.call(this);
+            resetAllPartyActorsTurnStateForBattleStart();
+        };
+    }
+
     // Sécurité supplémentaire: certains flux SRPG démarrent le tour acteur
     // sans passer par le chemin attendu côté UI.
     if (Game_System.prototype.srpgStartActorTurn) {
@@ -429,6 +520,7 @@
         Game_System.prototype.srpgStartActorTurn = function() {
             _CBN_Game_System_srpgStartActorTurn.call(this);
             resetExchangeUsageForNewTurn();
+            resetReserveActorsTurnState();
             const scene = SceneManager._scene;
             if (
                 scene &&
@@ -874,18 +966,22 @@
 
     Scene_Map.prototype._cbnMapBattleExchangeCommand = function(options) {
         options = options || {};
-        const fromEvent = !!options.eventInterpreter;
+        const fromEvent = !!options.eventInterpreter || !!options.fromEvent;
         const fromDeath = !!options.fromDeath;
+        const ignoreTurnLimit = !!options.ignoreTurnLimit;
+        const autoTrigger = !!options.autoTrigger;
         if (!fromDeath) {
-            if (fromEvent) {
-                if (isEventExchangeUsedThisTurn()) {
-                    SoundManager.playBuzzer();
-                    return false;
-                }
-            } else {
-                if (isMenuExchangeUsedThisTurn()) {
-                    SoundManager.playBuzzer();
-                    return false;
+            if (!ignoreTurnLimit) {
+                if (fromEvent) {
+                    if (isEventExchangeUsedThisTurn()) {
+                        SoundManager.playBuzzer();
+                        return false;
+                    }
+                } else {
+                    if (isMenuExchangeUsedThisTurn()) {
+                        SoundManager.playBuzzer();
+                        return false;
+                    }
                 }
             }
         }
@@ -900,6 +996,7 @@
         }
         this._cbnExchangeOpenFromDeath = fromDeath;
         this._cbnExchangeOpenFromEvent = fromEvent && !fromDeath;
+        this._cbnExchangeOpenFromAutoTrigger = autoTrigger && !fromDeath;
 
         if (options.eventInterpreter) {
             this._cbnExchangeEventWaitInterpreter = options.eventInterpreter;
@@ -917,13 +1014,20 @@
     };
 
     Scene_Map.prototype._cbnMapOnExchangeOk = function() {
+        cleanupAnyDeadEnemyEventsOnMap();
         const wasDeath = this._cbnExchangeOpenFromDeath;
+        const wasAutoTrigger = !!this._cbnExchangeOpenFromAutoTrigger;
+        const wasEventTrigger = !!this._cbnExchangeOpenFromEvent;
         if (!wasDeath) {
             this._cbnDeathExchangePendingRestore = null;
         }
         const newActor = this._exchangeWindow.actor(this._exchangeWindow.index());
 
         const activeEvent = mapEventForSubjectActor(this);
+        const outgoingPair = activeEvent && $gameSystem && $gameSystem.EventToUnit
+            ? $gameSystem.EventToUnit(activeEvent.eventId())
+            : null;
+        const outgoingBattler = outgoingPair && outgoingPair[1] ? outgoingPair[1] : null;
         const deadActorId =
             wasDeath && activeEvent
                 ? (() => {
@@ -931,6 +1035,22 @@
                       return p && p[1] && p[1].isActor() ? p[1].actorId() : null;
                   })()
                 : null;
+
+        // Cas special: echange declenche par evenement pendant l'action d'un acteur.
+        // Le lanceur doit rester "fin de tour" meme s'il part en reserve puis revient.
+        if (
+            !wasDeath &&
+            wasEventTrigger &&
+            outgoingBattler &&
+            outgoingBattler.isActor && outgoingBattler.isActor() &&
+            $gameSystem && $gameSystem.isBattlePhase && $gameSystem.isBattlePhase() === "actor_phase" &&
+            $gameSystem.isSubBattlePhase &&
+            ["invoke_action", "afterAction", "battle_window"].includes(String($gameSystem.isSubBattlePhase()))
+        ) {
+            if (outgoingBattler.setSrpgTurnEnd) outgoingBattler.setSrpgTurnEnd(true);
+            if (outgoingBattler.useSRPGActionTimes) outgoingBattler.useSRPGActionTimes(99);
+        }
+
         if (activeEvent && newActor) {
             let tileX;
             let tileY;
@@ -956,9 +1076,7 @@
             // évite l'affichage de PV "fantômes" de l'acteur remplacé.
             const swappedBattlerArray = $gameSystem.EventToUnit(activeEvent.eventId());
             if (swappedBattlerArray) {
-                if (!wasDeath && $gameSystem.setSrpgActorCommandWindowNeedRefresh) {
-                    $gameSystem.setSrpgActorCommandWindowNeedRefresh(swappedBattlerArray);
-                }
+                // Ne jamais demander l'ouverture auto de la commande acteur apres echange.
                 if ($gameSystem.setSrpgActorCommandStatusWindowNeedRefresh) {
                     $gameSystem.setSrpgActorCommandStatusWindowNeedRefresh(swappedBattlerArray, true);
                 }
@@ -967,15 +1085,14 @@
                     this._mapSrpgActorCommandStatusWindow.setBattler) {
                     this._mapSrpgActorCommandStatusWindow.setBattler(swappedBattlerArray[1]);
                 }
-                if (!wasDeath &&
-                    this._mapSrpgActorCommandWindow &&
-                    this._mapSrpgActorCommandWindow.setup) {
-                    this._mapSrpgActorCommandWindow.setup(swappedBattlerArray[1]);
-                }
+                // Pas de setup de la fenetre de commande ici: evite sa re-ouverture implicite.
             }
             applyExchangeFinalizePosition(activeEvent, tileX, tileY, tileDir);
             if (swappedBattlerArray && swappedBattlerArray[1]) {
                 refreshMapHpGaugeForEvent(this, activeEvent.eventId(), swappedBattlerArray[1]);
+            }
+            if (wasEventTrigger || wasAutoTrigger) {
+                resetMapBattleLungeVisualOffset(this, activeEvent.eventId());
             }
             // SRPG: originalPos sert au "retour" (annulation commande → actor_move) et aux tables de portée.
             // Sans ça, après un échange (mort ou menu) la case mémorisée reste celle d'un autre acteur / ancien tour.
@@ -994,9 +1111,12 @@
                 $gameParty.removeActor(deadActorId);
             }
             if (!this._cbnExchangeOpenFromDeath) {
-                if (this._cbnExchangeOpenFromEvent) {
+                if (this._cbnExchangeOpenFromAutoTrigger) {
+                    // Echange auto: ne consomme aucun budget manuel/evenement.
+                } else if (this._cbnExchangeOpenFromEvent) {
                     markEventExchangeUsedThisTurn();
                 } else {
+                    // Echange manuel uniquement.
                     markMenuExchangeUsedThisTurn();
                 }
                 markFirstPlayerExchangeSwitch();
@@ -1011,13 +1131,31 @@
         this._exchangeWindow.deactivate();
         if (!wasDeath) {
             const commandWindow = mapActorCommandWindow(this);
-            if (commandWindow) {
-                // On réactive juste la fenêtre de commandes d'acteur.
-                if (commandWindow.activate) commandWindow.activate();
+            const shouldReopenActorCommand = false;
+            if (commandWindow && !shouldReopenActorCommand) {
+                if (commandWindow.deactivate) commandWindow.deactivate();
             }
             if ($gameSystem && $gameSystem.setSubBattlePhase) {
-                const restore = this._cbnExchangePrevSubPhase || "actor_command_window";
+                const restore = shouldReopenActorCommand
+                    ? (this._cbnExchangePrevSubPhase || "actor_command_window")
+                    : "normal";
                 $gameSystem.setSubBattlePhase(restore);
+            }
+            if (!shouldReopenActorCommand && $gameSystem) {
+                if ($gameSystem.clearSrpgActorCommandWindowNeedRefresh) {
+                    $gameSystem.clearSrpgActorCommandWindowNeedRefresh();
+                }
+                if ($gameSystem.clearSrpgActorCommandStatusWindowNeedRefresh) {
+                    $gameSystem.clearSrpgActorCommandStatusWindowNeedRefresh();
+                }
+            }
+            if (!shouldReopenActorCommand && $gameTemp) {
+                if ($gameTemp.clearTargetEvent) $gameTemp.clearTargetEvent();
+                if ($gameTemp.setActiveEvent && activeEvent) {
+                    $gameTemp.setActiveEvent(activeEvent);
+                } else {
+                    restoreActiveEventFromSourceActor(this);
+                }
             }
         }
         clearExchangeEventWaitForScene(this);
@@ -1030,12 +1168,15 @@
         }
         this._cbnExchangeOpenFromDeath = false;
         this._cbnExchangeOpenFromEvent = false;
+        this._cbnExchangeOpenFromAutoTrigger = false;
         this._cbnExchangeSourceActor = null;
         this._cbnExchangePrevSubPhase = null;
+        cleanupAnyDeadEnemyEventsOnMap();
     };
 
     Scene_Map.prototype._cbnMapOnExchangeCancel = function() {
         const wasDeath = this._cbnExchangeOpenFromDeath;
+        const wasAutoTrigger = !!this._cbnExchangeOpenFromAutoTrigger;
         if (wasDeath && this._cbnDeathExchangeQueue && this._cbnDeathExchangeQueue.length > 0) {
             this._cbnDeathExchangePendingRestore = null;
             const head = this._cbnDeathExchangeQueue[0];
@@ -1053,16 +1194,25 @@
         this._exchangeWindow.hide();
         this._exchangeWindow.deactivate();
         const commandWindow = mapActorCommandWindow(this);
-        if (commandWindow) {
+        if (commandWindow && !wasAutoTrigger) {
             commandWindow.activate();
+        } else if (commandWindow && wasAutoTrigger) {
+            if (commandWindow.deactivate) commandWindow.deactivate();
         }
         if ($gameSystem && $gameSystem.setSubBattlePhase) {
-            const restore = this._cbnExchangePrevSubPhase || "actor_command_window";
+            const restore = wasAutoTrigger
+                ? "normal"
+                : (this._cbnExchangePrevSubPhase || "actor_command_window");
             $gameSystem.setSubBattlePhase(restore);
+        }
+        if (wasAutoTrigger && $gameTemp) {
+            if ($gameTemp.clearTargetEvent) $gameTemp.clearTargetEvent();
+            restoreActiveEventFromSourceActor(this);
         }
         clearExchangeEventWaitForScene(this);
         this._cbnExchangeOpenFromDeath = false;
         this._cbnExchangeOpenFromEvent = false;
+        this._cbnExchangeOpenFromAutoTrigger = false;
         this._cbnExchangeSourceActor = null;
         this._cbnExchangePrevSubPhase = null;
     };
@@ -1178,9 +1328,11 @@
     const _CBN_Scene_Map_srpgAfterAction = Scene_Map.prototype.srpgAfterAction;
     Scene_Map.prototype.srpgAfterAction = function() {
         if (this._cbnBlockDeadAfterBattleForDeathExchange) {
+            cleanupAnyDeadEnemyEventsOnMap();
             return;
         }
         _CBN_Scene_Map_srpgAfterAction.call(this);
+        cleanupAnyDeadEnemyEventsOnMap();
     };
 
     // Sécurité SRPG: certains flux d'échange laissent l'action active vide avant la validation
@@ -1269,8 +1421,44 @@
         SoundManager.playBuzzer();
     }
 
+    function openRandomReserveExchangeFromEventCommand(args) {
+        syncExchangeUsageWithCurrentTurn();
+        const raw = args.actorId;
+        const actorId = raw !== undefined && raw !== "" ? Number(raw) : 0;
+        const scene = SceneManager._scene;
+
+        if (scene instanceof Scene_Map) {
+            scene._cbnExchangeSourceActor = resolveSourceActorForPlugin(actorId);
+            if (!scene._cbnMapBattleExchangeCommand({ eventInterpreter: null, fromEvent: true })) return false;
+            const count = scene._exchangeWindow && scene._exchangeWindow.maxItems ? scene._exchangeWindow.maxItems() : 0;
+            if (count <= 0) return false;
+            const randomIndex = Math.randomInt(count);
+            scene._exchangeWindow.select(randomIndex);
+            scene._cbnMapOnExchangeOk();
+            return true;
+        }
+
+        if (scene instanceof Scene_Battle) {
+            scene._cbnExchangeSourceActor = resolveSourceActorForPlugin(actorId);
+            if (!scene._cbnBattleExchangeCommand({ eventInterpreter: {} })) return false;
+            const count = scene._exchangeWindow && scene._exchangeWindow.maxItems ? scene._exchangeWindow.maxItems() : 0;
+            if (count <= 0) return false;
+            const randomIndex = Math.randomInt(count);
+            scene._exchangeWindow.select(randomIndex);
+            scene.onExchangeOk();
+            return true;
+        }
+
+        SoundManager.playBuzzer();
+        return false;
+    }
+
     PluginManager.registerCommand(PLUGIN_NAME, "OpenReserveExchangeFromEvent", function(args) {
         openReserveExchangeFromEventCommand(this, args);
+    });
+
+    PluginManager.registerCommand(PLUGIN_NAME, "RandomReserveExchangeFromEvent", function(args) {
+        openRandomReserveExchangeFromEventCommand(args || {});
     });
 
     window.CbnOpenReserveExchangeFromEvent = function(actorId) {
@@ -1280,6 +1468,12 @@
             return;
         }
         openReserveExchangeFromEventCommand(inter, {
+            actorId: actorId !== undefined && actorId !== null ? String(actorId) : "0"
+        });
+    };
+
+    window.CbnRandomReserveExchangeFromEvent = function(actorId) {
+        openRandomReserveExchangeFromEventCommand({
             actorId: actorId !== undefined && actorId !== null ? String(actorId) : "0"
         });
     };

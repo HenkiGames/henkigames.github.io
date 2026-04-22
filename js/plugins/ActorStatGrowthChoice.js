@@ -1068,6 +1068,48 @@
     return `${pct}%`;
   }
 
+  function battleExchangeSkillDescriptionForActor(actor) {
+    if (!actor || !$gameVariables || $gameVariables.value(114) !== 5) return "";
+    const actorData = actor.actor ? actor.actor() : null;
+    if (!actorData || !actorData.meta) return "";
+    const skillId = Number(actorData.meta.battleExchangeSkillId || 0);
+    if (!(skillId > 0)) return "";
+    const skill = $dataSkills && $dataSkills[skillId];
+    if (!skill || !skill.description) return "";
+    return String(skill.description).trim();
+  }
+
+  function drawWrappedLines(window, text, x, y, width, maxLines) {
+    if (!text || width <= 0 || maxLines <= 0) return;
+    const normalized = String(text).replace(/\r\n/g, "\n");
+    const paragraphs = normalized.split("\n");
+    const lines = [];
+    for (const paragraph of paragraphs) {
+      const words = paragraph.split(/\s+/).filter(Boolean);
+      if (words.length === 0) {
+        lines.push("");
+      } else {
+        let line = words[0];
+        for (let i = 1; i < words.length; i++) {
+          const candidate = line + " " + words[i];
+          if (window.textWidth(candidate) <= width) {
+            line = candidate;
+          } else {
+            lines.push(line);
+            line = words[i];
+          }
+        }
+        lines.push(line);
+      }
+      if (lines.length >= maxLines) break;
+    }
+    const lineHeight = window.lineHeight();
+    const count = Math.min(lines.length, maxLines);
+    for (let i = 0; i < count; i++) {
+      window.drawText(lines[i], x, y + lineHeight * i, width, "left");
+    }
+  }
+
   const _Window_Status_drawBasicInfo_cbnGrowth = Window_Status.prototype.drawBasicInfo;
   Window_Status.prototype.drawBasicInfo = function(x, y) {
     _Window_Status_drawBasicInfo_cbnGrowth.call(this, x, y);
@@ -1089,6 +1131,18 @@
     // On conserve uniquement les infos de base (niveau, icones, jauges).
     // Les blocs "Total XP" et "Prochain niveau" sont volontairement supprimes.
     this.drawBasicInfo(204, y);
+    const desc = battleExchangeSkillDescriptionForActor(this._actor);
+    if (!desc) return;
+    const x = 430;
+    const width = Math.max(120, this.innerWidth - x - 12);
+    const title = "Passif d'echange";
+    const top = y + this.lineHeight() * 0;
+    const maxLines = 6;
+    this.resetTextColor();
+    this.changeTextColor(ColorManager.systemColor());
+    this.drawText(title, x, top, width, "left");
+    this.resetTextColor();
+    drawWrappedLines(this, desc, x, top + this.lineHeight(), width, maxLines);
   };
 
   Window_StatusParams.prototype.drawItem = function(index) {
