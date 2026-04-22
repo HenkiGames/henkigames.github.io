@@ -1,6 +1,6 @@
 [
 null,
-{"id":1,"atypeId":0,"description":"","etypeId":2,"traits":[{"code":22,"dataId":1,"value":0}],"iconIndex":0,"name":"-Bracelet-","note":"","params":[0,0,0,0,0,0,0,0],"price":0},
+{"id":1,"atypeId":0,"description":"","etypeId":2,"traits":[],"iconIndex":0,"name":"-Bracelet-","note":"","params":[0,0,0,0,0,0,0,0],"price":0},
 {"id":2,"atypeId":1,"description":"A bracelet which enables strong counterattack.\n\"counterattack change：Strong Attack\"","etypeId":2,"traits":[],"iconIndex":144,"name":"Bracelet of Strong Attack","note":"<srpgReactionSkill:30>\n応戦の優先度は\nステート＞防具＞武器＞スキル＞エネミー＞\n職業＞アクター＞プラグインのデフォルト\nとなっている。\n腕輪と固有なら、固有の方が\n優先度が上になる（後ろにあるため）。","params":[0,0,0,0,0,0,0,0],"price":200},
 {"id":3,"atypeId":1,"description":"A bracelet which enables preemptive counterattack.\n\"counterattack change：Preemptive Attack\"","etypeId":2,"traits":[],"iconIndex":144,"name":"Bracelet of Preemptive Attack","note":"<srpgReactionSkill:31>\n","params":[0,0,0,0,0,0,0,0],"price":200},
 {"id":4,"atypeId":1,"description":"A bracelet which enables shooting counterattack.\n\"counterattack change：Shuriken\"","etypeId":2,"traits":[],"iconIndex":144,"name":"Bracelet of Shuriken","note":"<srpgReactionSkill:32>\n","params":[0,0,0,0,0,0,0,0],"price":200},
