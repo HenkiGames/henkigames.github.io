@@ -162,9 +162,7 @@
             TRIGGER_STATE_ID > 0 &&
             this.isActor && this.isActor() &&
             this.isStateAffected && this.isStateAffected(TRIGGER_STATE_ID);
-
         _Game_Battler_removeStatesAuto.call(this, timing);
-
         if (!shouldTrack) return;
         if (this.isStateAffected && this.isStateAffected(TRIGGER_STATE_ID)) return;
         if (!this.actorId) return;
