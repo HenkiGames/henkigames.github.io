@@ -1068,6 +1068,14 @@
     return `${pct}%`;
   }
 
+  function flatStateParamBonus(actor, paramId) {
+    if (!actor || !window.CbnFlatStatBuffs || !window.CbnFlatStatBuffs.flatBonusForParam) {
+      return 0;
+    }
+    const value = window.CbnFlatStatBuffs.flatBonusForParam(actor, paramId);
+    return Number.isFinite(value) ? value : 0;
+  }
+
   function battleExchangeSkillDescriptionForActor(actor) {
     if (!actor || !$gameVariables || $gameVariables.value(114) !== 5) return "";
     const actorData = actor.actor ? actor.actor() : null;
@@ -1114,7 +1122,7 @@
   Window_Status.prototype.drawBasicInfo = function(x, y) {
     _Window_Status_drawBasicInfo_cbnGrowth.call(this, x, y);
     if (!this._actor) return;
-    const hpBonus = lineageParamBonus(this._actor, 0);
+    const hpBonus = lineageParamBonus(this._actor, 0) + flatStateParamBonus(this._actor, 0);
     if (!Number.isFinite(hpBonus) || hpBonus === 0) return;
     const lineHeight = this.lineHeight();
     const sign = hpBonus > 0 ? "+" : "";
@@ -1156,7 +1164,7 @@
     if (index <= 3) {
       const paramId = index + 2; // ATK, DEF, MAT, MDF
       const paramValue = this._actor.param(paramId);
-      const bonus = lineageParamBonus(this._actor, paramId);
+      const bonus = lineageParamBonus(this._actor, paramId) + flatStateParamBonus(this._actor, paramId);
       name = TextManager.param(paramId);
       value = String(paramValue);
       if (Number.isFinite(bonus) && bonus !== 0) {

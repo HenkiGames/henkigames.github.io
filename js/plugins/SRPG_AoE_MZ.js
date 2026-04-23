@@ -1074,6 +1074,7 @@ Sprite_SrpgAoE.prototype.constructor = Sprite_SrpgAoE;
 		this.clearAreaTargets();
 		var friends = (user.isActor()) ? 'actor' : 'enemy';
 		var opponents = (user.isActor()) ? 'enemy' : 'actor';
+		var isAllOpponentSkill = skill.areaType() === 'allopponent';
 		// check if the targets are limited
 		var limit = skill.areaTargetLimit();
 
@@ -1082,7 +1083,14 @@ Sprite_SrpgAoE.prototype.constructor = Sprite_SrpgAoE;
 			if (event.isErased()) return false;
 			if ((event.isType() === friends && skill.isForFriend()) || 
 				(event.isType() === opponents && skill.isForOpponent())) {
-				return $gameTemp.inArea(event);
+				if (!$gameTemp.inArea(event)) return false;
+				if (isAllOpponentSkill && event.isType() === 'enemy') {
+					var targetUnit = $gameSystem.EventToUnit(event.eventId());
+					if (targetUnit && targetUnit[0] === 'enemy' && targetUnit[1] && targetUnit[1].enemyId() === 199) {
+						return false;
+					}
+				}
+				return true;
 			}
 		});
 
