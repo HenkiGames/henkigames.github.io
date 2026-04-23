@@ -237,6 +237,7 @@
         const preservedTp = newActor.tp;
         $gameMap.changeActor(eventId, newActor.actorId());
         newActor.setTp(preservedTp);
+        refreshMapVisualsAfterForcedSwap(eventId, newActor);
         if (targetEvent && targetEvent.setDirection) {
             targetEvent.setDirection(targetEvent.direction());
         }
@@ -244,6 +245,33 @@
             `${LOG_PREFIX} instant swap succes: oldActor=${targetBattler.actorId()} -> newActor=${newActor.actorId()} eventId=${eventId}.`
         );
         return true;
+    }
+
+    function refreshMapVisualsAfterForcedSwap(eventId, battler) {
+        const scene = SceneManager && SceneManager._scene;
+        if (!(scene instanceof Scene_Map)) return;
+        if (!scene._spriteset || !scene._spriteset._characterSprites) return;
+        const sprites = scene._spriteset._characterSprites;
+        for (const sprite of sprites) {
+            if (!sprite || !sprite._character || !sprite._character.isEvent || !sprite._character.isEvent()) continue;
+            if (!sprite._character.eventId || sprite._character.eventId() !== eventId) continue;
+            if (sprite._HpGauge && sprite._HpGauge.setBattler) {
+                sprite._HpGauge.setBattler(battler);
+                sprite._HpGauge._requestRefresh = true;
+                if (sprite._HpGauge.refresh) sprite._HpGauge.refresh();
+            }
+            break;
+        }
+        // SRPG status window peut afficher les PV de l'ancien acteur jusqu'au prochain cycle.
+        if (scene._mapSrpgActorCommandStatusWindow && scene._mapSrpgActorCommandStatusWindow.setBattler) {
+            scene._mapSrpgActorCommandStatusWindow.setBattler(battler);
+        }
+        if ($gameSystem && $gameSystem.setSrpgActorCommandStatusWindowNeedRefresh) {
+            const pair = $gameSystem.EventToUnit ? $gameSystem.EventToUnit(eventId) : null;
+            if (pair) {
+                $gameSystem.setSrpgActorCommandStatusWindowNeedRefresh(pair, true);
+            }
+        }
     }
 
     function getReserveCandidatesExcluding(excludedActor) {
