@@ -48,11 +48,26 @@
       user.srpgSkillRange &&
       (metaRange !== null ? metaRange <= 0 : user.srpgSkillRange(item) <= 0);
 
+    // Garde-fou: certains enchainements laissent une AoE active sans cible valide.
+    // Le plugin SRPG_AoE_MZ fait areaTargets().shift().event sans verification.
+    if ($gameTemp._activeAoE && user && action) {
+      $gameTemp.selectArea(user, action);
+      const areaTargets = $gameTemp.areaTargets ? $gameTemp.areaTargets() : [];
+      const first = Array.isArray(areaTargets) ? areaTargets[0] : null;
+      if (first && first.event) {
+        $gameTemp.setTargetEvent(first.event);
+      }
+      return;
+    }
+
     if (!$gameTemp._activeAoE && user && action && item && area > 0 && srpgRange0) {
       const dir = activeEvent.direction();
       $gameTemp.showArea(activeEvent.posX(), activeEvent.posY(), dir);
       if ($gameTemp.selectArea(user, action) && $gameTemp.areaTargets().length > 0) {
-        $gameTemp.setTargetEvent($gameTemp.areaTargets().shift().event);
+        const first = $gameTemp.areaTargets()[0];
+        if (first && first.event) {
+          $gameTemp.setTargetEvent(first.event);
+        }
         return;
       }
     }
