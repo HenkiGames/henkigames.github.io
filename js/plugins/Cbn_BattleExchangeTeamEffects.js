@@ -76,6 +76,10 @@
         "exchangeCooldownScope"
     ];
     let _lastTriggerSignature = "";
+    let _pendingEnemyCountResyncFrames = 0;
+    let _enemyCountMonitorActive = false;
+    let _enemyCountMonitorFrames = 0;
+    let _enemyCountMonitorTick = 0;
 
     function parsePositiveInt(value) {
         const n = Number(value);
@@ -267,14 +271,7 @@
         const minRange = Math.max(0, Number((skill && skill.meta && skill.meta.srpgAreaMinRange) || 0));
         const shape = String((skill && skill.meta && skill.meta.srpgAreaType) || "circle").trim().toLowerCase() || "circle";
         const centerEvent = activeEvent || eventForBattler(subject);
-        if (!centerEvent) {
-            console.log(`${LOG_PREFIX} AOE-DEBUG resolveSelfCenteredAoE: centerEvent introuvable.`);
-            return out;
-        }
-        console.log(
-            `${LOG_PREFIX} AOE-DEBUG center=${centerEvent.eventId ? centerEvent.eventId() : "?"}` +
-            ` pos=(${centerEvent.posX()},${centerEvent.posY()}) range=${range} min=${minRange} shape=${shape}`
-        );
+        if (!centerEvent) return out;
 
         const adjacentCandidates = collectAliveSrpgBattlersBySide(false).concat(collectAliveSrpgBattlersBySide(true));
         const centerX = Number(centerEvent.posX());
@@ -289,19 +286,11 @@
             const dx = Math.abs(dxRaw);
             const dy = Math.abs(dyRaw);
             const manhattan = dx + dy;
-            const name = entry.battler.name ? entry.battler.name() : "unknown";
-            const side = entry.battler.isActor && entry.battler.isActor() ? "actor" : "enemy";
             const inRange = $gameMap && $gameMap.inArea
                 ? $gameMap.inArea(dxRaw, dyRaw, range, minRange, shape, dir)
                 : manhattan <= range;
-            console.log(
-                `${LOG_PREFIX} AOE-DEBUG candidat ${side}:${name}` +
-                ` pos=(${entry.event.posX()},${entry.event.posY()}) dx=${dxRaw} dy=${dyRaw} d=${manhattan}` +
-                ` inRange=${inRange}`
-            );
             if (inRange) out.push(entry.battler);
         }
-        console.log(`${LOG_PREFIX} AOE-DEBUG total cibles adjacentes=${out.length}.`);
         return out;
     }
 
@@ -332,34 +321,6 @@
         const cooldownReduced = applyTeamCooldownReductionFromSkill(actor, skill);
         const targets = resolveTargetsByScope(actor, skill, activeEvent);
         const targetEvents = resolveEventsForTargets(targets);
-        const srpgAreaType = String((skill.meta && skill.meta.srpgAreaType) || "").trim();
-        const srpgAreaRange = Number((skill.meta && skill.meta.srpgAreaRange) || 0);
-        const targetDebug = targets.map(t => {
-            if (!t) return "null";
-            const name = t.name ? t.name() : "unknown";
-            const isActor = t.isActor && t.isActor();
-            return `${isActor ? "actor" : "enemy"}:${name}`;
-        });
-        const opponentsDebug = opponentsForDebug(actor).map(t => {
-            const name = t.name ? t.name() : "unknown";
-            return `enemy:${name}`;
-        });
-        console.log(
-            `${LOG_PREFIX} scope skill=${skill.scope} targets=${targets.length} skillId=${skillId}.`,
-            targetDebug
-        );
-        if (activeEvent) {
-            console.log(
-                `${LOG_PREFIX} AOE-DEBUG activeEvent id=${activeEvent.eventId ? activeEvent.eventId() : "?"}` +
-                ` pos=(${activeEvent.posX()},${activeEvent.posY()})`
-            );
-        } else {
-            console.log(`${LOG_PREFIX} AOE-DEBUG activeEvent absent.`);
-        }
-        console.log(
-            `${LOG_PREFIX} srpgAreaType=${srpgAreaType || "(none)"} srpgAreaRange=${srpgAreaRange}.`
-        );
-        console.log(`${LOG_PREFIX} ennemis detectes=`, opponentsDebug);
         if (targets.length <= 0) {
             if (cooldownReduced) {
                 console.log(`${LOG_PREFIX} aucune cible resolue, mais reduction des cooldowns appliquee.`);
@@ -369,49 +330,14 @@
             return;
         }
         withTemporaryAoECenter(actor, skill, activeEvent, () => {
-            console.log(
-                `${LOG_PREFIX} AOE-DEBUG centre temporaire area=(${typeof $gameTemp.areaX === "function" ? $gameTemp.areaX() : "?"},` +
-                `${typeof $gameTemp.areaY === "function" ? $gameTemp.areaY() : "?"})`
-            );
             for (let i = 0; i < targets.length; i++) {
                 const target = targets[i];
-                const targetName = target && target.name ? target.name() : `target#${i}`;
-                const targetEvent = eventForBattler(target);
-                const hpBefore = target && typeof target.hp === "number" ? target.hp : null;
-                const mpBefore = target && typeof target.mp === "number" ? target.mp : null;
-                const tpBefore = target && typeof target.tp === "number" ? target.tp : null;
-                if (targetEvent) {
-                    console.log(
-                        `${LOG_PREFIX} AOE-DEBUG application sur ${targetName}` +
-                        ` event=${targetEvent.eventId ? targetEvent.eventId() : "?"}` +
-                        ` pos=(${targetEvent.posX()},${targetEvent.posY()})` +
-                        ` distCentre=${Math.abs(targetEvent.posX() - $gameTemp.areaX()) + Math.abs(targetEvent.posY() - $gameTemp.areaY())}`
-                    );
-                } else {
-                    console.log(`${LOG_PREFIX} AOE-DEBUG application sur ${targetName} sans event map.`);
-                }
                 const action = new Game_Action(actor);
                 action.setSkill(skillId);
                 action.apply(target);
                 if (target && target.result && target.result() && !target.result().used) {
-                    console.log(`${LOG_PREFIX} AOE-DEBUG fallback forceApplyAction pour ${targetName}.`);
                     forceApplyAction(action, target);
                 }
-                const hpAfter = target && typeof target.hp === "number" ? target.hp : null;
-                const mpAfter = target && typeof target.mp === "number" ? target.mp : null;
-                const tpAfter = target && typeof target.tp === "number" ? target.tp : null;
-                const result = target && target.result ? target.result() : null;
-                console.log(
-                    `${LOG_PREFIX} cible=${targetName} hp ${hpBefore}=>${hpAfter} mp ${mpBefore}=>${mpAfter} tp ${tpBefore}=>${tpAfter}` +
-                    ` | used=${result ? result.used : "?"}` +
-                    ` missed=${result ? result.missed : "?"}` +
-                    ` evaded=${result ? result.evaded : "?"}` +
-                    ` critical=${result ? result.critical : "?"}` +
-                    ` hpDamage=${result ? result.hpDamage : "?"}` +
-                    ` mpDamage=${result ? result.mpDamage : "?"}` +
-                    ` tpDamage=${result ? result.tpDamage : "?"}` +
-                    ` addedStates=${result && result.addedStateObjects ? result.addedStateObjects().map(s => s.id).join(",") : ""}`
-                );
                 if (target.startDamagePopup) target.startDamagePopup();
                 if (target.performResultEffects) target.performResultEffects();
             }
@@ -433,7 +359,16 @@
         }
 
         processDeathsThroughSrpgPipeline(targets);
+        requestEnemyCountResync(30);
 
+    }
+
+    function requestEnemyCountResync(frames) {
+        const value = Math.max(1, Number(frames || 1));
+        _pendingEnemyCountResyncFrames = Math.max(_pendingEnemyCountResyncFrames, value);
+        _enemyCountMonitorActive = true;
+        _enemyCountMonitorFrames = Math.max(_enemyCountMonitorFrames, Math.max(120, value));
+        _enemyCountMonitorTick = 0;
     }
 
     function teamCooldownReductionAmountFromSkill(skill) {
@@ -588,7 +523,6 @@
         }
         const centerEvent = activeEvent || eventForBattler(subject);
         if (!centerEvent) {
-            console.log(`${LOG_PREFIX} AOE-DEBUG withTemporaryAoECenter: aucun centre, execution brute.`);
             callback();
             return;
         }
@@ -606,22 +540,10 @@
             shape: areaType,
             dir: facingDir
         };
-        console.log(
-            `${LOG_PREFIX} AOE-DEBUG set _activeAoE x=${$gameTemp._activeAoE.x} y=${$gameTemp._activeAoE.y}` +
-            ` size=${$gameTemp._activeAoE.size} shape=${$gameTemp._activeAoE.shape} dir=${$gameTemp._activeAoE.dir}`
-        );
         try {
             callback();
         } finally {
             $gameTemp._activeAoE = previousAoE;
-            if (previousAoE) {
-                console.log(
-                    `${LOG_PREFIX} AOE-DEBUG restore _activeAoE x=${previousAoE.x} y=${previousAoE.y}` +
-                    ` size=${previousAoE.size} shape=${previousAoE.shape}`
-                );
-            } else {
-                console.log(`${LOG_PREFIX} AOE-DEBUG restore _activeAoE=null.`);
-            }
         }
     }
 
@@ -657,17 +579,7 @@
             } else if (damage && typeof action.evalDamageFormula === "function") {
                 // Les skills utilitaires (damage type 0) utilisent souvent la formule
                 // pour des effets de position (ex: push/pull). On force son evaluation.
-                const formulaText = damage.formula || "";
-                const targetSide =
-                    target && target.isActor && target.isActor()
-                        ? "actor"
-                        : (target && target.isEnemy && target.isEnemy() ? "enemy" : "unknown");
-                console.log(
-                    `${LOG_PREFIX} AOE-DEBUG eval formule damageType=0 target=${targetSide}` +
-                    ` formula="${String(formulaText)}"`
-                );
-                const formulaValue = action.evalDamageFormula(target);
-                console.log(`${LOG_PREFIX} AOE-DEBUG resultat formule=${formulaValue}.`);
+                action.evalDamageFormula(target);
             }
             const effects = item && Array.isArray(item.effects) ? item.effects : [];
             for (let i = 0; i < effects.length; i++) {
@@ -679,7 +591,7 @@
     }
 
     function processDeathsThroughSrpgPipeline(targets) {
-        const deadTargets = (targets || []).filter(t => t && t.isDead && t.isDead());
+        const deadTargets = (targets || []).filter(t => isBattlerEffectivelyDead(t));
         if (deadTargets.length <= 0) return;
         const scene = SceneManager._scene;
         if (scene && typeof scene.srpgBattlerDeadAfterBattle === "function") {
@@ -688,6 +600,40 @@
         }
         cleanupDeadEnemyTargets(deadTargets);
         syncSrpgExistEnemyCount();
+        tryRunPostExchangeAfterActionLifecycle(scene, "dead_targets");
+        requestEnemyCountResync(45);
+    }
+
+    function tryRunPostExchangeAfterActionLifecycle(scene, reason) {
+        if (!(scene instanceof Scene_Map)) return;
+        if (
+            !$gameSystem ||
+            !$gameSystem.isSRPGMode ||
+            !$gameSystem.isSRPGMode()
+        ) {
+            return;
+        }
+        try {
+            if (typeof scene.eventAfterAction === "function") {
+                scene.eventAfterAction();
+            }
+            // Si tous les ennemis sont morts, on force aussi un tick d'evaluation.
+            // Cela aide les events/conditions de victoire qui s'executent juste apres action.
+            const computed = computeAliveEnemyCountOnMap();
+            if (computed <= 0 && typeof scene.eventUnitEvent === "function") {
+                const activeEvent = $gameTemp && $gameTemp.activeEvent ? $gameTemp.activeEvent() : null;
+                if (activeEvent && !activeEvent.isErased()) {
+                    scene.eventUnitEvent();
+                }
+            }
+        } catch (e) { /* no-op */ }
+    }
+
+    function isBattlerEffectivelyDead(battler) {
+        if (!battler) return false;
+        if (battler.isDead && battler.isDead()) return true;
+        if (typeof battler.hp === "number" && battler.hp <= 0) return true;
+        return false;
     }
 
     function syncSrpgExistEnemyCount() {
@@ -703,28 +649,7 @@
         ) {
             return;
         }
-        const events = $gameMap.events();
-        let aliveEnemyCount = 0;
-        for (let i = 0; i < events.length; i++) {
-            const ev = events[i];
-            if (!ev || ev.isErased()) continue;
-            const pair = $gameSystem.EventToUnit(ev.eventId());
-            const battler = pair && pair[1];
-            if (!battler || !battler.isEnemy || !battler.isEnemy()) continue;
-            // Compat SRPG_ObstacleGate: les obstacles enemies ne comptent pas
-            // dans existEnemyVarID pour la condition de victoire.
-            if (
-                battler.enemy &&
-                battler.enemy() &&
-                battler.enemy().meta &&
-                battler.enemy().meta.srpgObstacle
-            ) {
-                continue;
-            }
-            if (battler.isAlive && battler.isAlive()) {
-                aliveEnemyCount++;
-            }
-        }
+        const aliveEnemyCount = computeAliveEnemyCountOnMap();
         const oldValue = Number($gameVariables.value(SRPG_EXIST_ENEMY_VAR_ID) || 0);
         if (oldValue !== aliveEnemyCount) {
             $gameVariables.setValue(SRPG_EXIST_ENEMY_VAR_ID, aliveEnemyCount);
@@ -734,11 +659,37 @@
         }
     }
 
+    function computeAliveEnemyCountOnMap() {
+        if (
+            !$gameMap ||
+            !$gameMap.events ||
+            !$gameSystem ||
+            !$gameSystem.EventToUnit
+        ) {
+            return 0;
+        }
+        const events = $gameMap.events();
+        let aliveEnemyCount = 0;
+        for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
+            if (!ev || ev.isErased()) continue;
+            const pair = $gameSystem.EventToUnit(ev.eventId());
+            const battler = pair && pair[1];
+            if (!battler || !battler.isEnemy || !battler.isEnemy()) continue;
+            if (isSrpgObstacleBattler(battler)) continue;
+            const aliveByState = !!(battler.isAlive && battler.isAlive());
+            const aliveByHp = typeof battler.hp === "number" ? battler.hp > 0 : true;
+            if (aliveByState && aliveByHp) aliveEnemyCount++;
+        }
+        return aliveEnemyCount;
+    }
+
     function cleanupDeadEnemyTargets(deadTargets) {
         if (!$gameMap || !$gameSystem) return;
         for (let i = 0; i < deadTargets.length; i++) {
             const battler = deadTargets[i];
             if (!battler || !battler.isEnemy || !battler.isEnemy()) continue;
+            if (!isBattlerEffectivelyDead(battler)) continue;
             if (!battler.srpgEventId) continue;
             const eventId = Number(battler.srpgEventId() || 0);
             if (eventId <= 0) continue;
@@ -874,9 +825,42 @@
         const swappedActor = $gameActors && $gameActors.actor ? $gameActors.actor(Number(actorId || 0)) : null;
         if (!swappedActor) return;
         const inExchangeFlow = !!(scene._exchangeWindow || scene._cbnExchangeOpenFromEvent || scene._cbnExchangeOpenFromDeath);
-        console.log(
-            `${LOG_PREFIX} fallback changeActor hook eventId=${eventId} actorId=${actorId} inExchangeFlow=${inExchangeFlow}.`
-        );
         triggerExchangeEffectOnce(swappedActor, $gameMap.event(eventId), "game_map_change_actor_fallback");
+    };
+
+    const _Scene_Map_update_CbnExchangeTeamEffects = Scene_Map.prototype.update;
+    Scene_Map.prototype.update = function() {
+        _Scene_Map_update_CbnExchangeTeamEffects.call(this);
+        if (_pendingEnemyCountResyncFrames > 0) {
+            _pendingEnemyCountResyncFrames--;
+            syncSrpgExistEnemyCount();
+        }
+        if (!_enemyCountMonitorActive) return;
+        _enemyCountMonitorTick++;
+        if (_enemyCountMonitorFrames > 0) _enemyCountMonitorFrames--;
+        const computed = computeAliveEnemyCountOnMap();
+        const currentVar = Number($gameVariables.value(SRPG_EXIST_ENEMY_VAR_ID) || 0);
+        if (currentVar !== computed) {
+            $gameVariables.setValue(SRPG_EXIST_ENEMY_VAR_ID, computed);
+        }
+        if (_enemyCountMonitorFrames <= 0) {
+            _enemyCountMonitorActive = false;
+        }
+    };
+
+    if (Scene_Map.prototype.srpgAfterAction) {
+        const _Scene_Map_srpgAfterAction_CbnExchangeTeamEffects = Scene_Map.prototype.srpgAfterAction;
+        Scene_Map.prototype.srpgAfterAction = function() {
+            _Scene_Map_srpgAfterAction_CbnExchangeTeamEffects.call(this);
+            requestEnemyCountResync(180);
+            syncSrpgExistEnemyCount();
+        };
+    }
+
+    const _Game_System_setSubBattlePhase_CbnExchangeTeamEffects = Game_System.prototype.setSubBattlePhase;
+    Game_System.prototype.setSubBattlePhase = function(phase) {
+        _Game_System_setSubBattlePhase_CbnExchangeTeamEffects.call(this, phase);
+        if (!_enemyCountMonitorActive) return;
+        syncSrpgExistEnemyCount();
     };
 })();

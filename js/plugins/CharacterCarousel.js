@@ -392,6 +392,188 @@
     return notInParty.filter(id => !hasOwnedEvolvedForm(id));
   }
 
+  function parseTypeMetaValue(rawValue) {
+    if (rawValue == null) return null;
+    const text = String(rawValue).trim();
+    if (!text) return null;
+    if (/^\d+$/.test(text)) {
+      return { elementId: Number(text), typeName: "" };
+    }
+    return { elementId: 0, typeName: text };
+  }
+
+  function resolveElementIdByTypeNameLoose(typeName) {
+    const needle = String(typeName || "").trim().toLowerCase();
+    if (!needle || !$dataSystem || !$dataSystem.elements) return 0;
+    for (let i = 1; i < $dataSystem.elements.length; i++) {
+      const dbName = String($dataSystem.elements[i] || "").trim();
+      if (!dbName) continue;
+      if (dbName.toLowerCase() === needle) return i;
+    }
+    return 0;
+  }
+
+  function resolveActorTypeInfo(actorData, actorInstance) {
+    const fromClassMeta = actorInstance && actorInstance.currentClass && actorInstance.currentClass()
+      ? parseTypeMetaValue(actorInstance.currentClass().meta ? actorInstance.currentClass().meta.type : null)
+      : null;
+    const fromActorMeta = actorData && actorData.meta
+      ? parseTypeMetaValue(actorData.meta.type)
+      : null;
+    const parsed = fromClassMeta || fromActorMeta;
+    if (!parsed) return null;
+
+    let typeName = "";
+    let iconIndex = 0;
+    if (parsed.elementId > 0) {
+      typeName = $dataSystem && $dataSystem.elements
+        ? String($dataSystem.elements[parsed.elementId] || "").trim()
+        : "";
+      if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByElementId === "function") {
+        iconIndex = Number(window.CbnTypeIcons.iconByElementId(parsed.elementId) || 0);
+      }
+      if (!typeName) typeName = `ID ${parsed.elementId}`;
+    } else {
+      const resolvedElementId = resolveElementIdByTypeNameLoose(parsed.typeName);
+      if (resolvedElementId > 0) {
+        typeName = String($dataSystem.elements[resolvedElementId] || "").trim();
+        if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByElementId === "function") {
+          iconIndex = Number(window.CbnTypeIcons.iconByElementId(resolvedElementId) || 0);
+        }
+      } else {
+        typeName = parsed.typeName;
+        if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByTypeName === "function") {
+          iconIndex = Number(window.CbnTypeIcons.iconByTypeName(parsed.typeName) || 0);
+        }
+      }
+    }
+    return { typeName, iconIndex };
+  }
+
+  function parseTypeListMetaValue(rawValue) {
+    if (rawValue == null) return [];
+    return String(rawValue)
+      .split(",")
+      .map(value => String(value || "").trim())
+      .filter(value => value.length > 0);
+  }
+
+  function resolveTypeDisplayFromLooseValue(rawTypeValue) {
+    const parsed = parseTypeMetaValue(rawTypeValue);
+    if (!parsed) return null;
+
+    let typeName = "";
+    let iconIndex = 0;
+    if (parsed.elementId > 0) {
+      typeName = $dataSystem && $dataSystem.elements
+        ? String($dataSystem.elements[parsed.elementId] || "").trim()
+        : "";
+      if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByElementId === "function") {
+        iconIndex = Number(window.CbnTypeIcons.iconByElementId(parsed.elementId) || 0);
+      }
+      if (!typeName) typeName = `ID ${parsed.elementId}`;
+    } else {
+      const resolvedElementId = resolveElementIdByTypeNameLoose(parsed.typeName);
+      if (resolvedElementId > 0) {
+        typeName = String($dataSystem.elements[resolvedElementId] || "").trim();
+        if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByElementId === "function") {
+          iconIndex = Number(window.CbnTypeIcons.iconByElementId(resolvedElementId) || 0);
+        }
+      } else {
+        typeName = parsed.typeName;
+        if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByTypeName === "function") {
+          iconIndex = Number(window.CbnTypeIcons.iconByTypeName(parsed.typeName) || 0);
+        }
+      }
+    }
+    if (!typeName) return null;
+    return { typeName, iconIndex };
+  }
+
+  function buildWrappedTypeLine(label, entries, maxWidth, measureTextFn) {
+    if (!entries.length) return [`${label}Aucun`];
+    const continuationPrefix = " ".repeat(label.length);
+    const lines = [];
+    let current = label;
+
+    for (let i = 0; i < entries.length; i++) {
+      const isFirstItemOnLine = current === label || current === continuationPrefix;
+      const separator = isFirstItemOnLine ? "" : ", ";
+      const token = `${separator}${entries[i]}`;
+      const candidate = `${current}${token}`;
+
+      if (!isFirstItemOnLine && measureTextFn(candidate) > maxWidth) {
+        lines.push(current);
+        current = `${continuationPrefix}${entries[i]}`;
+      } else {
+        current = candidate;
+      }
+    }
+
+    lines.push(current);
+    return lines;
+  }
+
+  function buildTypeMatchLinesForActorClass(actorInstance, maxWidth, measureTextFn) {
+    const cls = actorInstance && actorInstance.currentClass ? actorInstance.currentClass() : null;
+    const meta = cls && cls.meta ? cls.meta : null;
+    if (!meta) return [];
+
+    const strongTypes = parseTypeListMetaValue(meta.typeFortContre);
+    const weakTypes = parseTypeListMetaValue(meta.typeFaibleContre);
+
+    const formatTypeEntries = values => {
+      if (!values.length) return [];
+      return values.map(value => {
+        const display = resolveTypeDisplayFromLooseValue(value);
+        if (!display) return String(value);
+        const iconPart = display.iconIndex > 0 ? ` \\I[${display.iconIndex}]` : "";
+        return `${display.typeName}${iconPart}`;
+      });
+    };
+
+    return [
+      ...buildWrappedTypeLine(
+        "Efficace contre : ",
+        formatTypeEntries(strongTypes),
+        maxWidth,
+        measureTextFn
+      ),
+      ...buildWrappedTypeLine(
+        "Faible contre : ",
+        formatTypeEntries(weakTypes),
+        maxWidth,
+        measureTextFn
+      )
+    ];
+  }
+
+  function measureExTextWidth(windowBase, text) {
+    if (
+      windowBase &&
+      typeof windowBase.textSizeEx === "function" &&
+      windowBase.contents
+    ) {
+      return windowBase.textSizeEx(String(text || "")).width;
+    }
+    return String(text || "").length * 10;
+  }
+
+  function buildTypeMatchBlockForActorClass(actorInstance, windowBase) {
+    const maxWidth = windowBase && typeof windowBase.contentsWidth === "function"
+      ? Math.max(80, windowBase.contentsWidth() - 8)
+      : 700;
+    const measureTextFn = text => measureExTextWidth(windowBase, text);
+    const lines = buildTypeMatchLinesForActorClass(actorInstance, maxWidth, measureTextFn);
+    if (!lines.length) {
+      return (
+        `Efficace contre : Aucun\n` +
+        `Faible contre : Aucun`
+      );
+    }
+    return lines.join("\n");
+  }
+
   function shuffleArray(array) {
     const a = array.slice();
     for (let i = a.length - 1; i > 0; i--) {
@@ -441,6 +623,7 @@
       this.createArrows();
       this.createStatsWindow();
       this.createDescriptionWindow();
+      this.createTypeMatchWindow();
       this.createValidateButton();
       this.refreshDisplay();
       this.playSelectionSe();
@@ -465,6 +648,13 @@
       this._descWindow = new Window_Base(rect);
       this._descWindow.deactivate();
       this.addWindow(this._descWindow);
+    }
+
+    createTypeMatchWindow() {
+      const rect = new Rectangle(100, 540, Graphics.width - 200, 180);
+      this._typeMatchWindow = new Window_Base(rect);
+      this._typeMatchWindow.deactivate();
+      this.addWindow(this._typeMatchWindow);
     }
 
     createValidateButton() {
@@ -587,18 +777,32 @@
       this._portraitSprite.bitmap = ImageManager.loadBitmap("img/portrait/", portraitName);
 
       const statsText =
-        `Nom: ${actor.name}\n` +
+        `Nom: ${actor.name}` +
+        (
+          (() => {
+            const typeInfo = resolveActorTypeInfo(actor, tempActor);
+            if (!typeInfo || !typeInfo.typeName) return "";
+            const iconSuffix = typeInfo.iconIndex > 0 ? ` \\I[${typeInfo.iconIndex}]` : "";
+            return `    Type: ${typeInfo.typeName}${iconSuffix}`;
+          })()
+        ) +
+        `\n` +
         `PV:${tempActor.mhp}` +
         ` - ATK:${tempActor.atk}` +
         ` - ATK SPE:${tempActor.mat}\n` +
-        `VIT:${tempActor.agi}` +
+        `CC:${Math.round(tempActor.cri * 100)}%` +
         ` - DEF:${tempActor.def}` +
         ` - DEF SPE:${tempActor.mdf}`;
       this._statsWindow.contents.clear();
       this._statsWindow.drawTextEx(statsText, 0, 0);
 
       this._descWindow.contents.clear();
-      this._descWindow.drawTextEx(actor.note || "Aucune description", 0, 0);
+      const descriptionText = actor.note || "Aucune description";
+      this._descWindow.drawTextEx(descriptionText, 0, 0);
+
+      this._typeMatchWindow.contents.clear();
+      const typeMatchText = buildTypeMatchBlockForActorClass(tempActor, this._typeMatchWindow);
+      this._typeMatchWindow.drawTextEx(typeMatchText, 0, 0);
     }
 
     update() {

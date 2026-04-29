@@ -82,14 +82,9 @@
             (scene && scene._cbnExchangeSourceActor) ||
             lastActionSubjectActor() ||
             (BattleManager.actor && BattleManager.actor());
-        if (subject && subject.actorId && $gameSystem.ActorToEvent) {
-            const eid = $gameSystem.ActorToEvent(subject.actorId());
-            if (eid) {
-                const ev = $gameMap.event(eid);
-                if (ev) return ev;
-            }
-        }
-        return $gameTemp.activeEvent ? $gameTemp.activeEvent() : null;
+        const mappedEvent = mapEventForActor(subject);
+        if (mappedEvent) return mappedEvent;
+        return currentActiveEvent();
     }
 
     function resolveCurrentActor(scene) {
@@ -133,14 +128,31 @@
         if (commandWindow && commandWindow._actor) {
             return commandWindow._actor;
         }
-        if ($gameSystem && $gameSystem.isSRPGMode && $gameSystem.isSRPGMode() &&
-            $gameTemp && $gameTemp.activeEvent && $gameTemp.activeEvent()) {
-            const battlerArray = $gameSystem.EventToUnit($gameTemp.activeEvent().eventId());
-            if (battlerArray && battlerArray[1]) {
-                return battlerArray[1];
-            }
-        }
+        const actorFromActiveEvent = battlerFromEvent(currentActiveEvent());
+        if (actorFromActiveEvent) return actorFromActiveEvent;
         return null;
+    }
+
+    // Event SRPG actuellement actif, filtré (null si erased/invalide).
+    function currentActiveEvent() {
+        const event = $gameTemp && $gameTemp.activeEvent ? $gameTemp.activeEvent() : null;
+        return event && !event.isErased() ? event : null;
+    }
+
+    // Résout le battler SRPG lié à un event de map.
+    function battlerFromEvent(event) {
+        if (!event || !$gameSystem || !$gameSystem.EventToUnit) return null;
+        const battlerArray = $gameSystem.EventToUnit(event.eventId());
+        return battlerArray && battlerArray[1] ? battlerArray[1] : null;
+    }
+
+    // Résout l'event de map d'un acteur déployé.
+    function mapEventForActor(actor) {
+        if (!actor || !actor.actorId || !$gameSystem || !$gameSystem.ActorToEvent || !$gameMap) return null;
+        const eventId = Number($gameSystem.ActorToEvent(actor.actorId()) || 0);
+        if (eventId <= 0) return null;
+        const event = $gameMap.event(eventId);
+        return event && !event.isErased() ? event : null;
     }
 
     function parsePositiveInt(value) {
@@ -565,24 +577,16 @@
         const fromLast = lastActionSubjectActor();
         if (fromLast) return fromLast;
         if (BattleManager.actor && BattleManager.actor()) return BattleManager.actor();
-        if ($gameSystem && $gameSystem.isSRPGMode && $gameSystem.isSRPGMode() &&
-            $gameTemp && $gameTemp.activeEvent && $gameTemp.activeEvent()) {
-            const battlerArray = $gameSystem.EventToUnit($gameTemp.activeEvent().eventId());
-            if (battlerArray && battlerArray[1]) return battlerArray[1];
-        }
+        const fromActiveEvent = battlerFromEvent(currentActiveEvent());
+        if (fromActiveEvent) return fromActiveEvent;
         return null;
     }
 
     function restoreActiveEventFromSourceActor(scene) {
         if (!$gameTemp || !$gameTemp.setActiveEvent) return;
         const actor = scene && scene._cbnExchangeSourceActor;
-        if (!actor || !actor.actorId || !$gameSystem || !$gameSystem.ActorToEvent) return;
-        const eid = Number($gameSystem.ActorToEvent(actor.actorId()) || 0);
-        if (eid <= 0 || !$gameMap) return;
-        const ev = $gameMap.event(eid);
-        if (ev && !ev.isErased()) {
-            $gameTemp.setActiveEvent(ev);
-        }
+        const sourceEvent = mapEventForActor(actor);
+        if (sourceEvent) $gameTemp.setActiveEvent(sourceEvent);
     }
 
     function clearExchangeEventWaitForScene(scene) {
@@ -948,14 +952,20 @@
 
     // Garde-fou SRPG: certains flux peuvent ouvrir la fenêtre de commande alors que
     // l'activeEvent est momentanément nul (ex: juste après un rappel/retrait).
-    // On évite le crash de SRPG_core.updatePlacement et on place la fenêtre en fallback.
+    // On évite le crash de SRPG_core.updatePlacement et on recale sur l'event acteur.
     const _Window_ActorCommand_updatePlacement_BX = Window_ActorCommand.prototype.updatePlacement;
     Window_ActorCommand.prototype.updatePlacement = function() {
         if ($gameSystem && $gameSystem.isSRPGMode && $gameSystem.isSRPGMode()) {
-            const activeEvent = $gameTemp && $gameTemp.activeEvent ? $gameTemp.activeEvent() : null;
+            const activeEvent = currentActiveEvent();
             if (!activeEvent) {
-                this.x = Math.floor((Graphics.boxWidth - this.width) / 2);
-                this.y = Math.floor(Graphics.boxHeight - this.height);
+                // Quand activeEvent est momentanément indisponible (swap/refresh SRPG),
+                // on recolle la fenêtre à l'event de l'acteur de commande au lieu du bas d'écran.
+                const fallbackActor = resolveCommandActor(this);
+                const fallbackEvent = mapEventForActor(fallbackActor);
+                if (fallbackEvent && $gameTemp && $gameTemp.setActiveEvent) {
+                    $gameTemp.setActiveEvent(fallbackEvent);
+                    _Window_ActorCommand_updatePlacement_BX.call(this);
+                }
                 return;
             }
         }

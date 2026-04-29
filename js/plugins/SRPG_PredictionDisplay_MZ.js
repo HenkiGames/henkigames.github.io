@@ -69,8 +69,9 @@
             battler.param(4) +
             '  DEF.SPE ' +
             battler.param(5) +
-            '  PM ' +
-            battler.srpgMove()
+            '  CC ' +
+            Math.round((battler.xparam(2) || 0) * 100) +
+            '%'
         );
     };
 
@@ -114,7 +115,7 @@
             this._srpgStateHelpFromStatusClick = false;
             return;
         }
-        if (Input.isTriggered('cancel') || TouchInput.isCancelled()) {
+        if (Input.isTriggered('cancel') || TouchInput.isCancelled() || TouchInput.isTriggered()) {
             hw.clear();
             hw.close();
             hw.hide();
@@ -128,12 +129,18 @@
         let text = '';
         if (entry.kind === 'state' && entry.state) {
             const s = entry.state;
-            const desc = s.description != null ? String(s.description).trim() : '';
-            if (desc) {
-                text = desc;
-            } else {
-                text = s.name || '';
-                if (s.message1) text = text + (text ? '\n' : '') + s.message1;
+            const title = s.name || '';
+            const noteLines = String(s.note || '')
+                .replace(/\r/g, '')
+                .split('\n')
+                .map(function (line) { return line.trim(); })
+                .filter(function (line) { return line.length > 0; })
+                .slice(0, 2);
+            text = title;
+            if (noteLines.length > 0) {
+                text += (text ? '\n' : '') + noteLines.join('\n');
+            } else if (s.message1) {
+                text += (text ? '\n' : '') + s.message1;
             }
         } else if (entry.kind === 'buff') {
             const n = TextManager.param(entry.paramId);

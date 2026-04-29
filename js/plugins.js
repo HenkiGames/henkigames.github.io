@@ -77,5 +77,6 @@ var $plugins =
 {"name":"Cbn_State97RandomExchange","status":true,"description":"SRPG: quand l'etat 97 expire en fin de tour, lance un echange reserve aleatoire.","parameters":{"triggerStateId":"97"}},
 {"name":"Cbn_SRPG_StatusShowReserve","status":true,"description":"[v1.0] SRPG: affiche aussi les acteurs en reserve dans les scenes de statut/menu.","parameters":{}},
 {"name":"Cbn_FlatStatBuffs","status":true,"description":"[v1.1] Bonus de stats plats via States avec stack du meme state.","parameters":{}},
-{"name":"Cbn_SRPG_StatusFlatBonusPreview","status":true,"description":"[v1.0] SRPG: affiche les bonus flat (+X) en vert dans la preview statut en combat.","parameters":{}}
+{"name":"Cbn_SRPG_StatusFlatBonusPreview","status":true,"description":"[v1.0] SRPG: affiche les bonus flat (+X) en vert dans la preview statut en combat.","parameters":{}},
+{"name":"Cbn_TypeIcons","status":true,"description":"Associe une icone aux types BDD + editeur visuel d'assignation.","parameters":{"mappings":"[]","fallbackIconIndex":"0","caseInsensitive":"true"}}
 ];

@@ -824,6 +824,115 @@
     this.drawText(ch.label, rect.x, rect.y, rect.width);
   };
 
+  function Window_StatGrowthActorStats() {
+    this.initialize(...arguments);
+  }
+
+  Window_StatGrowthActorStats.prototype = Object.create(Window_Base.prototype);
+  Window_StatGrowthActorStats.prototype.constructor = Window_StatGrowthActorStats;
+
+  Window_StatGrowthActorStats.prototype.initialize = function(rect) {
+    Window_Base.prototype.initialize.call(this, rect);
+    this._actor = null;
+    this._title = "";
+    this.refresh();
+  };
+
+  Window_StatGrowthActorStats.prototype.setTitle = function(title) {
+    this._title = String(title || "");
+    this.refresh();
+  };
+
+  Window_StatGrowthActorStats.prototype.setActor = function(actor) {
+    this._actor = actor || null;
+    this.refresh();
+  };
+
+  Window_StatGrowthActorStats.prototype.makeRows = function() {
+    const actor = this._actor;
+    if (!actor) return [];
+    const hpBonus = lineageParamBonus(actor, 0) + flatStateParamBonus(actor, 0);
+    const atkBonus = lineageParamBonus(actor, 2) + flatStateParamBonus(actor, 2);
+    const matBonus = lineageParamBonus(actor, 4) + flatStateParamBonus(actor, 4);
+    const defBonus = lineageParamBonus(actor, 3) + flatStateParamBonus(actor, 3);
+    const mdfBonus = lineageParamBonus(actor, 5) + flatStateParamBonus(actor, 5);
+    const critBonus = lineageXparamBonus(actor, 2);
+    const lsRate = lineageLifeStealRate(actor);
+    return [
+      { name: TextManager.param(0), value: String(actor.mhp), bonus: hpBonus },
+      { name: TextManager.param(2), value: String(actor.atk), bonus: atkBonus },
+      { name: TextManager.param(4), value: String(actor.mat), bonus: matBonus },
+      { name: TextManager.param(3), value: String(actor.def), bonus: defBonus },
+      { name: TextManager.param(5), value: String(actor.mdf), bonus: mdfBonus },
+      { name: "CC", value: formatPercent(actor.xparam(2)), bonus: critBonus, percentBonus: true },
+      { name: "VdV", value: formatPercent(lsRate), bonus: lsRate, percentBonus: true }
+    ];
+  };
+
+  Window_StatGrowthActorStats.prototype.drawRow = function(row, x, y, width) {
+    const valueX = x + Math.max(70, width - 110);
+    this.changeTextColor(ColorManager.systemColor());
+    this.drawText(row.name, x, y, Math.max(48, valueX - x - 6), "left");
+    this.resetTextColor();
+    this.drawText(row.value, valueX, y, 56, "right");
+    if (Number.isFinite(row.bonus) && row.bonus !== 0) {
+      const sign = row.bonus > 0 ? "+" : "";
+      const bonusValue = row.percentBonus ? formatPercent(row.bonus) : String(row.bonus);
+      const bonusText = `(${sign}${bonusValue})`;
+      this.changeTextColor(ColorManager.powerUpColor());
+      this.drawText(bonusText, valueX + 60, y, Math.max(50, x + width - (valueX + 60)), "right");
+      this.resetTextColor();
+    }
+  };
+
+  Window_StatGrowthActorStats.prototype.refresh = function() {
+    this.contents.clear();
+    const rows = this.makeRows();
+    const lineHeight = this.lineHeight();
+    let topY = 0;
+    if (this._title) {
+      this.changeTextColor(ColorManager.systemColor());
+      this.drawText(this._title, 0, 0, this.innerWidth, "left");
+      this.resetTextColor();
+      topY = lineHeight + 4;
+    }
+    const colGap = 16;
+    const colWidth = Math.floor((this.innerWidth - colGap) / 2);
+    const availableHeight = Math.max(lineHeight, this.innerHeight - topY);
+    const maxLines = Math.max(1, Math.floor(availableHeight / lineHeight));
+    const maxItems = Math.min(rows.length, maxLines * 2);
+    for (let i = 0; i < maxItems; i++) {
+      const col = Math.floor(i / maxLines);
+      const row = i % maxLines;
+      const x = col * (colWidth + colGap);
+      this.drawRow(rows[i], x, topY + row * lineHeight, colWidth);
+    }
+  };
+
+  function Window_StatGrowthMessage() {
+    this.initialize(...arguments);
+  }
+
+  Window_StatGrowthMessage.prototype = Object.create(Window_Base.prototype);
+  Window_StatGrowthMessage.prototype.constructor = Window_StatGrowthMessage;
+
+  Window_StatGrowthMessage.prototype.initialize = function(rect) {
+    Window_Base.prototype.initialize.call(this, rect);
+    this._text = "";
+    this.refresh();
+  };
+
+  Window_StatGrowthMessage.prototype.setText = function(text) {
+    this._text = String(text || "");
+    this.refresh();
+  };
+
+  Window_StatGrowthMessage.prototype.refresh = function() {
+    this.contents.clear();
+    this.resetTextColor();
+    this.drawText(this._text, 0, 0, this.innerWidth, "left");
+  };
+
   function Window_StateChoiceCards() {
     this.initialize(...arguments);
   }
@@ -996,8 +1105,9 @@
 
   Scene_StatGrowthChoice.prototype.create = function() {
     Scene_MenuBase.prototype.create.call(this);
-    this.createHelpWindow();
     this.createChoiceWindow();
+    this.createBottomMessageWindow();
+    this.createActorStatsWindow();
     if (this._cancelButton) {
       this._cancelButton.setClickHandler(this.onChoiceCancel.bind(this));
     }
@@ -1011,11 +1121,24 @@
       this.popScene();
       return;
     }
-    const name = actor.name();
-    this._helpWindow.setText(HELP_TEXT.replace("%1", name));
+    this._actorStatsWindow.setTitle("Statistiques actuelles");
+    this._actorStatsWindow.setActor(actor);
+    this._bottomMessageWindow.setText("Choisissez une amélioration pour Riolu");
     this._choiceWindow.setChoices(this._pickedChoices);
     this._choiceWindow.activate();
     this._choiceWindow.select(0);
+  };
+
+  Scene_StatGrowthChoice.prototype.actorStatsWindowRect = function() {
+    const ww = Math.min(Graphics.boxWidth - 48, 560);
+    const desiredStatsWh = this.calcWindowHeight(5, false);
+    const minStatsWh = this.calcWindowHeight(3, false);
+    const wx = (Graphics.boxWidth - ww) / 2;
+    const wy = this._choiceWindow.y + this._choiceWindow.height + 8;
+    const areaBottom = this._bottomMessageWindow ? this._bottomMessageWindow.y - 8 : this.mainAreaBottom();
+    const available = areaBottom - wy;
+    const wh = Math.max(minStatsWh, Math.min(desiredStatsWh, available));
+    return new Rectangle(wx, wy, ww, wh);
   };
 
   Scene_StatGrowthChoice.prototype.choiceWindowRect = function() {
@@ -1025,6 +1148,26 @@
     const wx = (Graphics.boxWidth - ww) / 2;
     const wy = this.mainAreaTop() + 16;
     return new Rectangle(wx, wy, ww, wh);
+  };
+
+  Scene_StatGrowthChoice.prototype.createActorStatsWindow = function() {
+    const rect = this.actorStatsWindowRect();
+    this._actorStatsWindow = new Window_StatGrowthActorStats(rect);
+    this.addWindow(this._actorStatsWindow);
+  };
+
+  Scene_StatGrowthChoice.prototype.bottomMessageWindowRect = function() {
+    const ww = Math.min(Graphics.boxWidth - 48, 560);
+    const wh = this.calcWindowHeight(1, false);
+    const wx = (Graphics.boxWidth - ww) / 2;
+    const wy = this.mainAreaBottom() - wh;
+    return new Rectangle(wx, wy, ww, wh);
+  };
+
+  Scene_StatGrowthChoice.prototype.createBottomMessageWindow = function() {
+    const rect = this.bottomMessageWindowRect();
+    this._bottomMessageWindow = new Window_StatGrowthMessage(rect);
+    this.addWindow(this._bottomMessageWindow);
   };
 
   Scene_StatGrowthChoice.prototype.createChoiceWindow = function() {

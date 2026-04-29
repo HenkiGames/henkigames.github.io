@@ -177,6 +177,81 @@
 
 	var coreParameters = PluginManager.parameters('SRPG_core_MZ');
 	var _rewardSe = coreParameters['rewardSound'] || 'Item3';
+
+	function cbnParseTypeListMetaValue(rawValue) {
+		if (rawValue == null) return [];
+		return String(rawValue)
+			.split(',')
+			.map(function(value) { return String(value || '').trim(); })
+			.filter(function(value) { return value.length > 0; });
+	}
+
+	function cbnResolveElementIdByTypeNameLoose(typeName) {
+		var needle = String(typeName || '').trim().toLowerCase();
+		if (!needle || !$dataSystem || !$dataSystem.elements) return 0;
+		for (var i = 1; i < $dataSystem.elements.length; i++) {
+			var dbName = String($dataSystem.elements[i] || '').trim();
+			if (!dbName) continue;
+			if (dbName.toLowerCase() === needle) return i;
+		}
+		return 0;
+	}
+
+	function cbnTypeIconIndexFromRawType(rawType) {
+		var text = String(rawType || '').trim();
+		if (!text) return 0;
+		var iconIndex = 0;
+		if (/^\d+$/.test(text)) {
+			var elementId = Number(text);
+			if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByElementId === 'function') {
+				iconIndex = Number(window.CbnTypeIcons.iconByElementId(elementId) || 0);
+			}
+		} else {
+			var resolvedId = cbnResolveElementIdByTypeNameLoose(text);
+			if (resolvedId > 0) {
+				if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByElementId === 'function') {
+					iconIndex = Number(window.CbnTypeIcons.iconByElementId(resolvedId) || 0);
+				}
+			} else if (window.CbnTypeIcons && typeof window.CbnTypeIcons.iconByTypeName === 'function') {
+				iconIndex = Number(window.CbnTypeIcons.iconByTypeName(text) || 0);
+			}
+		}
+		return iconIndex > 0 ? iconIndex : 0;
+	}
+
+	function cbnBattlerWeakTypeIconsText(battler) {
+		if (!battler) return 'Faible contre: -';
+		var rawMetaValue = '';
+		if (battler.isActor && battler.isActor()) {
+			var actorClass = battler.currentClass ? battler.currentClass() : null;
+			if (actorClass && actorClass.meta && actorClass.meta.typeFaibleContre != null) {
+				rawMetaValue = actorClass.meta.typeFaibleContre;
+			} else if (battler.actor && battler.actor() && battler.actor().meta && battler.actor().meta.typeFaibleContre != null) {
+				rawMetaValue = battler.actor().meta.typeFaibleContre;
+			}
+		} else if (battler.isEnemy && battler.isEnemy()) {
+			var enemyData = battler.enemy ? battler.enemy() : null;
+			if (enemyData && enemyData.meta && enemyData.meta.typeFaibleContre != null) {
+				rawMetaValue = enemyData.meta.typeFaibleContre;
+			}
+		}
+		var values = cbnParseTypeListMetaValue(rawMetaValue);
+		if (!values.length) return 'Faible contre: -';
+		var icons = values
+			.map(cbnTypeIconIndexFromRawType)
+			.filter(function(iconId) { return iconId > 0; });
+		if (!icons.length) return 'Faible contre: -';
+		var iconText = icons.map(function(iconId) {
+			return '\\I[' + iconId + ']';
+		}).join(', ');
+		return 'Faible contre: ' + iconText;
+	}
+
+	Window_Base.prototype.drawCbnWeakTypeIconsOnly = function(battler, x, y, width) {
+		var line = cbnBattlerWeakTypeIconsText(battler);
+		this.resetTextColor();
+		this.drawTextEx(line, x, y, width || 0);
+	};
 //====================================================================
 // don't show exp rewards if you didn't get any
 //====================================================================
@@ -376,6 +451,22 @@
 		}
     };
 
+	Window_SrpgActorCommandStatus.prototype.cbnWeakAgainstAnchor = function(x, y) {
+		var drawFn = Window_StatusBase.prototype.drawActorSimpleStatusSrpg;
+		var source = drawFn ? String(drawFn) : '';
+		var usesVanillaLayout = source.indexOf('x2 = x + 180') >= 0;
+		if (usesVanillaLayout) {
+			var vanillaGaugeX = x + 180;
+			var vanillaGaugeY = y + this.lineHeight();
+			return { x: vanillaGaugeX + 128 + 8, y: vanillaGaugeY - 6 };
+		}
+		// Layout compact (plugins de preview custom) :
+		// y3 = y + step*2 + iconHeight + 6 avec step=22
+		var compactGaugeX = x;
+		var compactGaugeY = y + 22 * 2 + ImageManager.iconHeight + 6;
+		return { x: compactGaugeX + 128 + 8, y: compactGaugeY - 6 };
+	};
+
 	// アクターのステータスの描画
     Window_SrpgActorCommandStatus.prototype.drawContentsActor = function() {
         this.drawActorItemImage();
@@ -391,7 +482,13 @@
     Window_SrpgActorCommandStatus.prototype.drawActorItemStatus = function() {
         const x = 180;
         const y = 0;
+		const anchor = this.cbnWeakAgainstAnchor(x, y);
+		const desiredWeakIconsX = anchor.x;
+		const minRightWidth = 220;
+		const maxWeakIconsX = Math.max(0, this.contentsWidth() - minRightWidth);
+		const weakIconsX = Math.min(desiredWeakIconsX, maxWeakIconsX);
         this.drawActorSimpleStatusSrpg(this._battler, x, y);
+		this.drawCbnWeakTypeIconsOnly(this._battler, weakIconsX, anchor.y, this.contentsWidth() - weakIconsX);
     };
 
     // エネミーのステータスの描画
@@ -409,8 +506,52 @@
     Window_SrpgActorCommandStatus.prototype.drawEnemyItemStatus = function() {
         const x = 180;
         const y = 0;
+		const anchor = this.cbnWeakAgainstAnchor(x, y);
+		const desiredWeakIconsX = anchor.x;
+		const minRightWidth = 220;
+		const maxWeakIconsX = Math.max(0, this.contentsWidth() - minRightWidth);
+		const weakIconsX = Math.min(desiredWeakIconsX, maxWeakIconsX);
         this.drawEnemySimpleStatusSrpg(this._battler, x, y);
+		this.drawCbnWeakTypeIconsOnly(this._battler, weakIconsX, anchor.y, this.contentsWidth() - weakIconsX);
     };
+
+	// prévoir plus de place sur la fenêtre basse (survol)
+	const srpgUXWindows_Scene_Map_srpgActorCommandStatusWindowRect = Scene_Map.prototype.srpgActorCommandStatusWindowRect;
+	Scene_Map.prototype.srpgActorCommandStatusWindowRect = function() {
+		var rect = srpgUXWindows_Scene_Map_srpgActorCommandStatusWindowRect.call(this);
+		rect.height = this.calcWindowHeight(5, false);
+		rect.y = Graphics.boxHeight - rect.height;
+		return rect;
+	};
+
+	// prévoir 1 ligne supplémentaire en haut pour afficher "Faible contre"
+	const srpgUXWindows_Scene_Map_srpgStatusWindowRect = Scene_Map.prototype.srpgStatusWindowRect;
+	Scene_Map.prototype.srpgStatusWindowRect = function(target) {
+		var rect = srpgUXWindows_Scene_Map_srpgStatusWindowRect.call(this, target);
+		rect.height = this.calcWindowHeight(11, false);
+		return rect;
+	};
+
+	const srpgUXWindows_Window_SrpgStatus_drawSrpgParameters = Window_SrpgStatus.prototype.drawSrpgParameters;
+	Window_SrpgStatus.prototype.drawSrpgParameters = function(x, y) {
+		srpgUXWindows_Window_SrpgStatus_drawSrpgParameters.call(this, x, y);
+		this.drawCbnWeakTypeIconsOnly(this.battler(), x, y + this.lineHeight(), this.contentsWidth() - x);
+	};
+
+	// fenêtres de statut en scène de combat : +1 ligne
+	const srpgUXWindows_Scene_Battle_srpgBattleStatusWindowRect = Scene_Battle.prototype.srpgBattleStatusWindowRect;
+	Scene_Battle.prototype.srpgBattleStatusWindowRect = function(pos) {
+		var rect = srpgUXWindows_Scene_Battle_srpgBattleStatusWindowRect.call(this, pos);
+		rect.height = Window_Base.prototype.fittingHeight(5);
+		rect.y = Graphics.boxHeight - rect.height;
+		return rect;
+	};
+
+	const srpgUXWindows_Window_SrpgBattleStatus_drawBasicInfo = Window_SrpgBattleStatus.prototype.drawBasicInfo;
+	Window_SrpgBattleStatus.prototype.drawBasicInfo = function(x, y) {
+		srpgUXWindows_Window_SrpgBattleStatus_drawBasicInfo.call(this, x, y);
+		this.drawCbnWeakTypeIconsOnly(this._battler, x, y + this.lineHeight() * 3, this.contentsWidth() - x);
+	};
 
 	// カーソル移動時の処理
 	const srpgUXWindows_Scene_Map_srpgMovementExtension = Scene_Map.prototype.srpgMovementExtension;

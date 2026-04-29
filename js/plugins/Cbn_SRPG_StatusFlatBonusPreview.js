@@ -69,7 +69,7 @@
     cursorX = drawInlineParamWithBonus(win, battler, cursorX, y, "ATK.SPE", 4);
     cursorX = drawInlineParamWithBonus(win, battler, cursorX, y, "DEF.SPE", 5);
     win.resetTextColor();
-    win.drawText(`PM ${battler.srpgMove()}`, cursorX, y, 120, "left");
+    win.drawText(`CC ${Math.round((battler.xparam(2) || 0) * 100)}%`, cursorX, y, 120, "left");
   }
 
   const _Scene_Map_srpgStatusWindowRect = Scene_Map.prototype.srpgStatusWindowRect;
